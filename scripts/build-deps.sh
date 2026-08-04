@@ -100,15 +100,34 @@ cxx_runtime_lib() {
 # and guarantees the runtime appears in Libs.private if the project did not
 # emit one at all (meson's pkgconfig module does not add it for static C++
 # libraries, so openh264.pc arrives without it on every platform).
-# Idempotent, and a no-op-with-a-warning if the .pc is missing, because a
-# missing .pc is already fatal at FFmpeg's require_pkg_config with a clearer
-# message than anything we could print here.
+# Idempotent, and a HARD FAILURE if the .pc is missing.
+#
+# It used to warn and continue, on the theory that a missing .pc is "already
+# fatal at FFmpeg's require_pkg_config with a clearer message". Both halves of
+# that were wrong, and it cost a full CI round to find out. When x265 silently
+# stopped installing x265.pc, the Linux legs printed
+#     [warn] expected /work/build/deps/lib/pkgconfig/x265.pc after install ...
+# and then built openh264, dav1d, SVT-AV1, libaom, libvpx, opus, zimg, libvmaf
+# and GnuTLS for another NINE MINUTES before dying ~9000 log lines later with
+#     ERROR: x265 not found using pkg-config
+# which names neither the file nor the build step that should have produced
+# it. Every .pc passed to this function is checked by a `require_pkg_config`
+# in configure -- libx265 at :7432, libopenh264 at :7343, libvmaf at :7391,
+# libzimg at :7441 -- and every one of those libraries is enabled
+# unconditionally in flags/ffmpeg.flags on all five targets. So there is no
+# case where a missing one of these is survivable; failing here is strictly
+# better information, delivered ~10 minutes earlier.
 pc_fix_cxx() {
   local pc="$1" cxx
   cxx="$(cxx_runtime_lib)"
   if [ ! -f "$pc" ]; then
-    warn "expected $pc after install -- not found; FFmpeg's require_pkg_config will fail on it"
-    return 0
+    die "$(basename "$pc") was not installed into $(dirname "$pc").
+The library built and installed, but its pkg-config file is missing, so
+FFmpeg's require_pkg_config for it will fail. Look at what the dependency's
+own build system makes that file CONDITIONAL on -- x265, for one, only emits
+x265.pc when it can determine a version (x265/source/CMakeLists.txt:1113,
+which needs a tag reachable from HEAD; see restore_pin_tag in
+scripts/lib/common.sh)."
   fi
   sed -i.bak -e "s|-lstdc++|$cxx|g" "$pc"
   rm -f "$pc.bak"
@@ -325,6 +344,17 @@ build_x264() {
 #
 # The 10/12-bit builds are compiled with EXPORT_C_API=OFF so their symbols are
 # namespaced (x265_10bit_*, x265_12bit_*), then linked into the 8-bit lib.
+#
+# *** THIS BUILD DEPENDS ON THE x265 CHECKOUT HAVING A TAG. ***
+# x265's Version.cmake:144-151 gets X265_LATEST_TAG from `git describe
+# --abbrev=0 --tags`, and TWO things downstream break when that comes back
+# empty: CMakeLists.txt:1041-1043 aborts configure outright wherever a
+# resource compiler exists (i.e. MinGW/Windows), and CMakeLists.txt:1113
+# silently skips generating and installing x265.pc everywhere, which then
+# kills FFmpeg's configure:7432 require_pkg_config. A `git init` + `fetch
+# --depth 1 <sha>` checkout has no tags at all, so scripts/lib/common.sh's
+# restore_pin_tag puts X265_TAG back as a local tag. Read its comment before
+# changing anything about how sources are fetched.
 # ===========================================================================
 build_x265() {
   have_stamp x265 "$X265_COMMIT" && { log "x265 up to date"; return; }

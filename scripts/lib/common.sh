@@ -233,13 +233,93 @@ reviewed commit."
   log "verified $(basename "$dest")"
 }
 
-# fetch_git REPO COMMIT DEST_DIR [TAG_FOR_LOGGING]
-# Pins by COMMIT, never by tag: a moved tag becomes a hard failure.
+# restore_pin_tag DEST_DIR COMMIT TAG
+#
+# `fetch_git` clones with `git init` + `fetch --depth 1 origin <sha>`. That is
+# the right way to pin by commit, but it brings down NO REFS AT ALL: the
+# resulting checkout has an empty `git tag` list, and every `git describe` in
+# it fails with "fatal: No names found, cannot describe anything."
+#
+# For most dependencies that is cosmetic. For x265 it is FATAL, in two
+# different places, and it took out three of the five build legs at once:
+#
+#   x265/source/cmake/Version.cmake:144-151 runs
+#       git describe --abbrev=0 --tags
+#   into OUTPUT_VARIABLE X265_LATEST_TAG with ERROR_QUIET. A tagless clone
+#   makes that the EMPTY STRING -- note it overwrites the "0.0" default set
+#   at Version.cmake:29, so the fallback never applies. Then:
+#
+#   1. x265/source/CMakeLists.txt:1113
+#          if(X265_LATEST_TAG OR NOT GIT_FOUND)
+#      is false (empty tag, git present), so the ENTIRE pkg-config block --
+#      including CMakeLists.txt:1133-1135's `configure_file`/`install` of
+#      x265.pc -- is skipped. x265 builds, installs libx265.a and its
+#      headers, and simply never writes lib/pkgconfig/x265.pc. FFmpeg's
+#      configure:7432 `require_pkg_config libx265 x265 ...` is a hard die, so
+#      BOTH Linux legs got through the whole 15-minute dependency build and
+#      then failed with
+#          ERROR: x265 not found using pkg-config
+#
+#   2. x265/source/CMakeLists.txt:1041-1043
+#          string(REGEX MATCHALL "([0-9]+)" VERSION_LIST "${X265_LATEST_TAG}")
+#          list(GET VERSION_LIST 0 X265_VERSION_MAJOR)
+#          list(GET VERSION_LIST 1 X265_VERSION_MINOR)
+#      runs only `if(CMAKE_RC_COMPILER)`, i.e. only where a resource compiler
+#      exists -- MinGW on Windows. MATCHALL over an empty tag yields an empty
+#      list, so both `list(GET ...)` calls abort:
+#          CMake Error at CMakeLists.txt:1042 (list):
+#            list GET given empty list
+#      That is why Windows died at x265's CONFIGURE step while Linux got as
+#      far as FFmpeg's, from the same root cause.
+#
+# The fix is to put back the one piece of metadata the shallow fetch dropped:
+# a local lightweight tag at the pinned commit, named with the tag from
+# versions.lock. This does not weaken the pin -- the COMMIT is still what is
+# fetched, checked out and asserted; the tag is a label attached to an object
+# we have already verified by SHA, not a thing we resolve anything from.
+#
+# Applied to every dependency rather than special-cased for x265, because
+# "shallow clone has no tags" is a property of fetch_git, not of x265, and
+# several other deps derive their version string from `git describe` too
+# (libaom, libvpx, opus). Those currently report an unknown version; with the
+# tag they report the pinned one.
+restore_pin_tag() {
+  local dest="$1" commit="$2" tag="${3:-}"
+  [ -n "$tag" ] || return 0
+  # Already there (the full-fetch fallback below uses --tags, so real tags can
+  # be present) -- leave upstream's own tag object alone.
+  git -C "$dest" rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1 && return 0
+  # Not every *_TAG in versions.lock is an upstream tag: X264_TAG is the date
+  # label `master@2025-09-10` (x264 publishes no release tags). git accepts
+  # that as a ref name and it is inert -- x264's own version.sh:9-27 derives
+  # its version from `git rev-list HEAD | wc -l`, never from `git describe`,
+  # and under --depth 1 that count is 1 so the whole branch is skipped. But
+  # `..`, `~`, `^`, a trailing `.lock` and friends are NOT legal ref names, so
+  # ask git rather than guessing, and skip quietly rather than failing a fetch
+  # over a label that only ever mattered as documentation.
+  git check-ref-format "refs/tags/$tag" >/dev/null 2>&1 || return 0
+  git -C "$dest" tag -f "$tag" "$commit" >/dev/null 2>&1 || true
+}
+
+# fetch_git REPO COMMIT DEST_DIR [TAG]
+# Pins by COMMIT, never by tag: a moved tag becomes a hard failure. TAG is
+# used for the log line and, via restore_pin_tag above, re-attached locally to
+# the verified commit so dependency build systems that call `git describe`
+# still work in a shallow checkout.
 fetch_git() {
   local repo="$1" commit="$2" dest="$3" tag="${4:-}" have
   if [ -d "$dest/.git" ]; then
     have="$(git -C "$dest" rev-parse HEAD)"
-    if [ "$have" = "$commit" ]; then log "cached, verified: $(basename "$dest") @ $commit"; return 0; fi
+    if [ "$have" = "$commit" ]; then
+      # The tag restore MUST happen on this path too, not only after a fresh
+      # clone. build/sources is restored by actions/cache keyed on
+      # hashFiles('versions.lock'), so an unchanged pin set means every CI job
+      # takes this early return -- and a cache populated by an older run holds
+      # exactly the tagless checkouts described above.
+      restore_pin_tag "$dest" "$commit" "$tag"
+      log "cached, verified: $(basename "$dest") @ $commit"
+      return 0
+    fi
     warn "$(basename "$dest") at $have, want $commit -- refetching"
     rm -rf "$dest"
   fi
@@ -258,6 +338,9 @@ fetch_git() {
     || die "commit $commit not found in $repo (bad pin in versions.lock?)"
   have="$(git -C "$dest" rev-parse HEAD)"
   [ "$have" = "$commit" ] || die "post-checkout HEAD is $have, expected $commit"
+  # Only now that HEAD has been asserted equal to the pinned commit -- so the
+  # label can only ever be attached to a verified object.
+  restore_pin_tag "$dest" "$commit" "$tag"
   # Submodules are pinned transitively by the superproject's gitlink, so this
   # stays deterministic.
   git -C "$dest" submodule update -q --init --recursive --depth 1 2>/dev/null || true

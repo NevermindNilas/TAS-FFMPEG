@@ -39,12 +39,36 @@ mkdir -p "$CACHE"
 # --disable-cuda-llvm and --enable-cuda-nvcc. So we ALSO harvest every
 # identifier from configure's own `*_LIST="..."` blocks, translating `_` to
 # `-` the way configure's option parser does.
+#
+# *** THE PREFIX STRIP IS TWO SEPARATE POSIX BRE SUBSTITUTIONS ON PURPOSE ***
+# It used to be one:
+#     sed -e 's/^--\(enable\|disable\)-//'
+# `\|` is a GNU sed EXTENSION. POSIX basic regular expressions have no
+# alternation at all, and BSD sed -- which is what /usr/bin/sed is on the
+# macOS runners -- treats `\|` as a literal `|`. So on macOS that expression
+# matched the seven characters `enable|disable` and never fired: every name
+# came out of the pipeline still spelled `enable-foo` / `disable-foo`.
+#
+# That produced a FALSE NEGATIVE, not an obvious crash, because the awk
+# harvest below independently supplies almost every name we use. Measured
+# against ffmpeg-8.1.2: 83 of the 507 option names are reachable ONLY through
+# --help, and exactly one of those is a flag we pass -- `debug`. So the run
+# failed with
+#     ffmpeg.flags: UNKNOWN OPTION  --disable-debug
+# on both macOS legs while the SAME script, in the SAME run, passed on
+# ubuntu-latest for windows, linux AND macos. --disable-debug is a real
+# option (ffmpeg-8.1.2/configure:504); the validator was wrong.
+#
+# `--enable-` and `--disable-` are mutually exclusive prefixes, so applying
+# both strips in sequence is equivalent to the alternation and needs nothing
+# beyond POSIX BRE. (`sed -E` would also work on both userlands, but keeping
+# this in BRE means the whole pipeline stays inside the POSIX subset.)
 if [ ! -s "$CACHE/options.txt" ]; then
   log "extracting valid option names from $FF_SRC/configure"
   {
     ( cd "$FF_SRC" && ./configure --help ) 2>&1 \
       | grep -oE '^[[:space:]]+--[a-z0-9][a-z0-9-]*' \
-      | sed -e 's/^[[:space:]]*//' -e 's/^--\(enable\|disable\)-//' -e 's/^--//'
+      | sed -e 's/^[[:space:]]*//' -e 's/^--enable-//' -e 's/^--disable-//' -e 's/^--//'
     # Identifiers inside any `SOMETHING_LIST="` ... `"` block.
     awk '
       /^[A-Z0-9_]+_LIST="/ { inlist=1; next }
@@ -53,6 +77,39 @@ if [ ! -s "$CACHE/options.txt" ]; then
     ' "$FF_SRC/configure" | tr '_' '-'
   } | sort -u > "$CACHE/options.txt"
 fi
+
+# Self-test the extraction before trusting a single verdict from it.
+#
+# The bug above was a HOST-TOOL divergence: identical script, identical
+# FFmpeg source, different answer on BSD userland than on GNU userland. No
+# amount of care in the flag files could have caught it, and the symptom --
+# "UNKNOWN OPTION <a perfectly valid option>" -- pointed at the wrong file.
+#
+# These three names are load-bearing samples, chosen because each is
+# reachable through EXACTLY ONE of the two extraction paths -- so a probe
+# that survives cannot be masking a broken path. Measured against 8.1.2:
+#   debug, stripping  ONLY from `configure --help`. Both live in
+#                     CMDLINE_SELECT (configure:2806-2821), and the awk
+#                     harvest deliberately does not match that block: it
+#                     looks for `*_LIST="` and this one is CMDLINE_SELECT.
+#                     If the --help path breaks, these two vanish -- which is
+#                     precisely what happened on macOS.
+#   cuda              ONLY from the `*_LIST="` harvest, and it is the only
+#                     such name among the 53 we actually pass. --help prints
+#                     --disable-cuda-llvm and --enable-cuda-nvcc but never
+#                     --enable-cuda; it is valid because it is a CONFIG_LIST
+#                     entry. If the awk path breaks, this vanishes.
+# A miss here means the EXTRACTOR is broken on this host, so say that instead
+# of blaming the flag files.
+for probe in debug stripping cuda; do
+  grep -qxF -e "$probe" "$CACHE/options.txt" || die "flag-name extraction is broken on this host:
+'$probe' is a valid FFmpeg $FFMPEG_VERSION option and did not survive the
+pipeline into $CACHE/options.txt ($(wc -l < "$CACHE/options.txt" | tr -d ' ') names extracted).
+Every 'UNKNOWN OPTION' this script could print would be a false negative.
+This is what a GNU-vs-BSD sed/grep/awk difference looks like -- see the
+comment above the extraction. Delete $CACHE and fix the extraction; do NOT
+'fix' it by editing flags/."
+done
 
 for list in encoders decoders muxers demuxers parsers bsfs protocols filters hwaccels indevs outdevs; do
   if [ ! -s "$CACHE/$list.txt" ]; then
