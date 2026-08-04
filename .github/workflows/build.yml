@@ -230,6 +230,15 @@ jobs:
             -e TARGET_ARCH=${{ matrix.target_arch }} \
             tas-ffmpeg-${{ matrix.name }} ./scripts/build.sh
 
+      # The container runs as root against a bind mount, so everything it
+      # created under build/ and dist/ is root-owned. The steps that follow —
+      # cache save, artifact upload — run as the runner user (uid 1001) and
+      # would fail or silently skip files. Hand ownership back.
+      # Runs even on failure so a post-mortem artifact upload still works.
+      - name: Reclaim container-created files
+        if: matrix.container && always()
+        run: sudo chown -R "$(id -u):$(id -g)" build dist 2>/dev/null || true
+
       # --- macOS ---------------------------------------------------------
       - name: Install macOS build tools
         if: startsWith(matrix.name, 'macos')

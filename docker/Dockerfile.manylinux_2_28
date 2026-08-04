@@ -126,6 +126,24 @@ RUN /opt/python/cp312-cp312/bin/pip install --no-cache-dir "meson>=1.4,<2" "ninj
 # base-image change cannot silently fall back to the system gcc 8.
 ENV CC=gcc CXX=g++
 
+# /work is a bind mount of the checkout, and build/sources is restored by
+# actions/cache as the RUNNER user (uid 1001) while this container runs as
+# root. Git >= 2.35.2 then refuses every operation on the cached dependency
+# clones with
+#     fatal: detected dubious ownership in repository at
+#     '/work/build/sources/nv-codec-headers'
+# and fetch_git's `git rev-parse HEAD` exits 128 before a single dependency
+# is built. That is exactly how the first full CI run died on both Linux
+# legs.
+#
+# safe.directory='*' is the right call HERE specifically: this image is a
+# single-purpose, throwaway build container whose only content is our own
+# checkout and pinned sources that were already SHA256/commit-verified by
+# fetch-sources.sh. The ownership check protects against operating on a
+# repository planted by another user on a shared machine, which is not a
+# situation that exists inside a per-job container.
+RUN git config --global --add safe.directory '*'
+
 # The build scripts are bash and assume a POSIX environment.
 SHELL ["/bin/bash", "-c"]
 
