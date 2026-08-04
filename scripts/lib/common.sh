@@ -29,12 +29,22 @@ load_lock() {
   [ -f "$LOCK_FILE" ] || die "versions.lock not found at $LOCK_FILE"
   local bad
   # The value charset is an allowlist, not a denylist: it is what makes
-  # `source`-ing this file safe. '|' is permitted because *_URL may hold a
-  # mirror list (see fetch_tarball); it carries no meaning to the shell inside
-  # the double-quoted expansions we use, and every other metacharacter --
-  # $ ` ; & ( ) < > ' " space -- stays excluded, so command substitution and
-  # command chaining remain impossible.
-  bad="$(grep -vE '^[[:space:]]*(#.*)?$|^[A-Z][A-Z0-9_]*=[A-Za-z0-9._:/@+|-]*$' "$LOCK_FILE" || true)"
+  # `source`-ing this file safe.
+  #
+  # ',' is permitted so *_URL can hold a mirror list (see fetch_tarball). It is
+  # genuinely inert: bash treats a bare comma as an ordinary character, and the
+  # one construct that gives it meaning -- brace expansion, {a,b} -- needs
+  # braces, which this allowlist excludes.
+  #
+  # '|' was tried first and is NOT safe here, which cost a CI round. The lock
+  # is SOURCED, so a metacharacter matters at parse time, not merely inside the
+  # expansions the scripts perform:
+  #     GMP_URL=https://a|https://b
+  # parses as an assignment piped into a command named `https://b` and exits
+  # 127. Everything else that can execute -- $ ` ; & ( ) < > ' " { } and space
+  # -- stays excluded for the same reason. Do not widen this without checking
+  # what the character does to the PARSER.
+  bad="$(grep -vE '^[[:space:]]*(#.*)?$|^[A-Z][A-Z0-9_]*=[A-Za-z0-9._:/@+,-]*$' "$LOCK_FILE" || true)"
   if [ -n "$bad" ]; then
     die "versions.lock contains lines that are not plain KEY=value:
 $bad"
@@ -128,7 +138,7 @@ the shipped licences/ directory silently kept ignoring them." ;;
 # dep_tarball PREFIX -- basename of <PREFIX>_URL, i.e. the file fetch-sources
 # .sh leaves in $SRC_DIR for a tarball-distributed component.
 #
-# <PREFIX>_URL may be a '|'-separated mirror list (see fetch_tarball), so take
+# <PREFIX>_URL may be a ','-separated mirror list (see fetch_tarball), so take
 # the FIRST entry rather than basename'ing the whole string. Doing the latter
 # happens to work while every mirror ends in the same filename, and silently
 # returns the wrong name the moment one does not -- e.g. a mirror serving
@@ -137,7 +147,7 @@ dep_tarball() {
   local u
   eval "u=\${$1_URL:-}"
   [ -n "$u" ] || die "dep_tarball: ${1}_URL is not set in versions.lock"
-  basename "${u%%|*}"
+  basename "${u%%,*}"
 }
 
 # --- platform detection ----------------------------------------------------
@@ -171,9 +181,9 @@ sha256_of() {
   fi
 }
 
-# fetch_tarball URL[|URL...] DEST EXPECTED_SHA256
+# fetch_tarball URL[,URL...] DEST EXPECTED_SHA256
 #
-# URL may be a '|'-separated list of mirrors, tried left to right until one
+# URL may be a ','-separated list of mirrors, tried left to right until one
 # yields bytes. The FIRST url should be the most reliable host, not
 # necessarily the upstream one.
 #
@@ -194,8 +204,8 @@ fetch_tarball() {
     warn "cached $(basename "$dest") has wrong SHA256, refetching"
     rm -f "$dest"
   fi
-  local IFS='|'
-  # shellcheck disable=SC2206  # deliberate split on '|'
+  local IFS=','
+  # shellcheck disable=SC2206  # deliberate split on ','
   local mirror_list=($urls)
   unset IFS
   for url in "${mirror_list[@]}"; do

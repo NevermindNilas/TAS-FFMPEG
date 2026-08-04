@@ -242,7 +242,7 @@ GMP_VERSION=6.3.0
 # ftp.gnu.org FIRST: gmplib.org was unreachable from every GitHub runner on
 # the first full CI run and took out three build legs at once. The GNU
 # mirror was verified to serve a byte-identical tarball (same SHA256).
-GMP_URL=https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz|https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
+GMP_URL=https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz,https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
 GMP_SHA256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
 
 NETTLE_VERSION=3.10.2
@@ -251,7 +251,7 @@ NETTLE_SHA256=fe9ff51cb1f2abb5e65a6b8c10a92da0ab5ab6eaf26e7fc2b675c45f1fb519b5
 
 # configure:7231 has no version floor; 3.8.x is the current stable series.
 GNUTLS_VERSION=3.8.10
-GNUTLS_URL=https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.10.tar.xz|https://mirrors.dotsrc.org/gcrypt/gnutls/v3.8/gnutls-3.8.10.tar.xz
+GNUTLS_URL=https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.10.tar.xz,https://mirrors.dotsrc.org/gcrypt/gnutls/v3.8/gnutls-3.8.10.tar.xz
 GNUTLS_SHA256=db7fab7cce791e7727ebbef2334301c821d79a550ec55c9ef096b610b03eb6b7
 
 # ===========================================================================
@@ -344,7 +344,7 @@ ZLIB_REPO=https://github.com/madler/zlib.git
 # no-op on x86-64, so the ABI is unchanged.) Distro packages, MSYS2's
 # included, patch this header; we build vanilla source, so we must not.
 BZIP2_VERSION=1.0.8
-BZIP2_URL=https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz|https://ftp.osuosl.org/pub/blfs/conglomeration/bzip2/bzip2-1.0.8.tar.gz
+BZIP2_URL=https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz,https://ftp.osuosl.org/pub/blfs/conglomeration/bzip2/bzip2-1.0.8.tar.gz
 BZIP2_SHA256=ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269
 
 # xz / liblzma. Pinned to the 5.4 series ON PURPOSE: 5.6.0 and 5.6.1 are the
