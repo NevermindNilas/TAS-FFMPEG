@@ -1,0 +1,73 @@
+Licence of this repository, and of the binaries it produces
+===========================================================
+
+TWO DIFFERENT THINGS, DO NOT CONFLATE THEM.
+
+
+1. THE BINARIES THIS REPOSITORY PRODUCES
+----------------------------------------
+
+    GPL-2.0-or-later.
+
+FFmpeg is configured here with --enable-gpl and statically links x264 and
+x265, both of which are GPL. That makes the resulting ffmpeg, ffprobe and
+libav*/libsw* binaries GPL-2.0-or-later.
+
+--enable-version3 is deliberately NOT used, so the result stays at "version 2
+or later" rather than being forced up to GPLv3. --enable-nonfree is never
+used; the result would be undistributable.
+
+If you redistribute those binaries you must pass on the licence texts (every
+archive ships them in licenses/) and you must provide the complete
+corresponding source. That source is published with every release as
+tas-ffmpeg-<version>-corresponding-source.tar.xz, and it contains the
+unmodified FFmpeg tarball, every dependency at its pinned commit, and this
+entire build system.
+
+See docs/LICENSING.md.in for the full component table and the written offer.
+
+
+2. THE BUILD SYSTEM IN THIS REPOSITORY
+--------------------------------------
+
+    MIT.
+
+versions.lock, flags/, scripts/, docker/, docs/ and .github/ are original
+work. They are not derived from FFmpeg or from any GPL dependency; they
+configure and invoke those projects, which is not the same thing.
+
+GPL-2.0 section 3 requires "the scripts used to control compilation and
+installation" to ACCOMPANY the binaries. It does not require them to be
+licensed GPL. MIT is GPL-compatible, so this build system is included
+verbatim in every corresponding-source archive and that obligation is fully
+satisfied — while leaving the scripts reusable in contexts the GPL would
+forbid. This mirrors BtbN/FFmpeg-Builds, which is likewise MIT.
+
+MIT License
+
+Copyright (c) 2026 the tas-ffmpeg contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Note: the MIT grant above covers THIS BUILD SYSTEM ONLY. It does not and
+cannot relicense FFmpeg, x264, x265 or any other dependency, and it does not
+apply to the binaries produced — see section 1.
+
+The full GPLv2 text is reproduced in every release archive as
+licenses/ffmpeg/COPYING.GPLv2.

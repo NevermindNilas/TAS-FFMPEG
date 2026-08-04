@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# .gitattributes
+#
+# WHY THIS FILE EXISTS: every script in this repo is bash, and two of the three
+# CI legs check the repo out on a machine where Git for Windows' default
+# `core.autocrlf=true` is in effect (the `windows-2022` runner, and any
+# contributor on Windows). Without this file `actions/checkout` rewrites
+# scripts/*.sh with CRLF line endings and the MSYS2 leg dies immediately with
+#     /usr/bin/env: 'bash\r': No such file or directory
+# or, once running, with
+#     $'\r': command not found
+# -- before a single line of FFmpeg is compiled, and with a diagnostic that
+# reads like a corrupted toolchain rather than a checkout setting.
+#
+# The same hazard applies to versions.lock (a trailing \r would end up inside
+# every pinned value, so `curl "$FFMPEG_URL"` would fetch a URL with a CR in
+# it) and to flags/*.flags (a trailing \r would be appended to every configure
+# flag). So the rule is repo-wide, not just for *.sh.
+# ---------------------------------------------------------------------------
+
+# Normalise everything Git considers text to LF in the working tree, on every
+# platform. This is the whole fix; the lines below only make the intent
+# explicit for the files where a CRLF would be fatal rather than merely ugly.
+* text=auto eol=lf
+
+*.sh          text eol=lf
+*.flags       text eol=lf
+*.lock        text eol=lf
+*.md          text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.txt         text eol=lf
+*.in          text eol=lf
+Dockerfile*   text eol=lf
+.gitattributes text eol=lf
+.gitignore    text eol=lf
+LICENSE       text eol=lf
+
+# Never touch binaries: a fetched tarball or an archive under dist/ must stay
+# byte-identical to what we hashed.
+*.tar.xz  binary
+*.tar.gz  binary
+*.zip     binary
+*.xz      binary
+*.gz      binary
+*.png     binary
+*.asc     binary

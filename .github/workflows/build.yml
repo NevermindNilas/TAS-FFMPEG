@@ -1,0 +1,324 @@
+name: build
+
+# Builds the single union FFmpeg for all FIVE targets (win64, linux64,
+# linuxarm64, macos-arm64, macos-x86_64) and publishes a release
+# with SHA256SUMS, the corresponding-source archive, and ffmpeg-pin.lock.
+#
+# Triggers:
+#   * push of a tag `v*`      -> full build + release
+#   * pull_request            -> flag validation only (cheap, catches typos)
+#   * workflow_dispatch       -> full build, no release unless `release: true`
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['flags/**', 'scripts/**', 'versions.lock', 'docker/**', '.github/**']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a GitHub release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Cheap gate: validate every flag name and component name against the pinned
+  # FFmpeg source before spending an hour of runner time on four builds.
+  # This is the check that catches `--enable-encoder=mov_text` (the real name
+  # is `movtext`), which configure would accept and silently ignore.
+  # -------------------------------------------------------------------------
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # See the `Cache pinned sources` step in the build job for why this is
+      # safe. Same key, so validate usually POPULATES it for everyone else.
+      - name: Cache pinned sources
+        uses: actions/cache@v4
+        with:
+          path: build/sources
+          key: tas-ffmpeg-src-${{ runner.os }}-${{ hashFiles('versions.lock') }}
+          restore-keys: tas-ffmpeg-src-${{ runner.os }}-
+      - name: Fetch and verify sources
+        run: ./scripts/fetch-sources.sh
+      - name: Validate flags for all platforms
+        run: ./scripts/validate-flags.sh windows linux macos
+
+  # -------------------------------------------------------------------------
+  build:
+    needs: validate
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: win64
+            os: windows-2022
+            target_arch: x86_64
+          - name: linux64
+            os: ubuntu-latest        # host only; the build runs in the container
+            target_arch: x86_64
+            container: true
+            lock_key: MANYLINUX_IMAGE_X86_64
+            docker_platform: linux/amd64
+          # nelux ships Linux/aarch64 wheels (Nelux/tools/ffmpeg.lock:113-119
+          # LINUXARM64_BTBN_*). Without this job that platform keeps a BtbN
+          # fallback whose autobuild tag WILL be pruned, and it is the one
+          # target where "both consumers run the same build" does not hold.
+          #
+          # `ubuntu-24.04-arm` is a NATIVE aarch64 runner (free for public
+          # repos). If that label is unavailable on this account, switch os to
+          # ubuntu-latest and add a docker/setup-qemu-action step before the
+          # image build -- correct, but roughly 10x slower.
+          - name: linuxarm64
+            os: ubuntu-24.04-arm
+            target_arch: arm64
+            container: true
+            lock_key: MANYLINUX_IMAGE_AARCH64
+            docker_platform: linux/arm64
+          # --- macOS runner labels: CHECK THESE BEFORE EVERY RELEASE -------
+          # GitHub retires macOS images on a ~2-year cycle and a retired label
+          # is a HARD job-initialisation failure, not a fallback:
+          #     "The macOS-13 based runner images are now retired."
+          # (actions/runner-images#13046). It does NOT silently remap to a
+          # newer image, so a stale label here means the leg simply never runs
+          # -- and `fail-fast: false` means the rest of the matrix would still
+          # publish a release that is quietly missing a platform.
+          #
+          # macos-15  : Apple Silicon (arm64), GA, free on public repos.
+          #             Replaces macos-14, which is deprecated (brownouts from
+          #             2026-10-05, fully unsupported 2026-11-02).
+          # macos-15-intel : native Intel (x86_64), GA, free on public repos.
+          #             Replaces macos-13 (retired 2025-12-04). NOT the same
+          #             as `macos-15-large`, which is also x86_64 but is a
+          #             PAID larger runner.
+          #
+          # *** x86_64 macOS ENDS IN AUGUST 2027. *** GitHub has stated the
+          # `-intel` labels are the last x86_64 images and that the
+          # architecture will not be supported on Actions after that date
+          # (actions/runner-images#13045). When that happens this leg has to
+          # be dropped, and README.md + scripts/emit-consumer-pin.sh already
+          # say so, because both consumers must stop expecting a
+          # macos-x86_64 archive rather than silently fetching a stale one.
+          #
+          # These are NATIVE builds, not cross-compiles. That matters:
+          # scripts/build-ffmpeg.sh:80-83 has a cross-compile branch, but
+          # nothing in scripts/build-deps.sh implements one (no
+          # -DCMAKE_OSX_ARCHITECTURES, no meson cross files), so if
+          # TARGET_ARCH ever disagreed with the runner's real architecture the
+          # dependencies would be built for the host while FFmpeg's CFLAGS
+          # asked for the other arch.
+          - name: macos-arm64
+            os: macos-15             # Apple Silicon runner -- native
+            target_arch: arm64
+          - name: macos-x86_64
+            os: macos-15-intel       # Intel runner -- native, not cross
+            target_arch: x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- pinned sources cache -----------------------------------------
+      # Every job re-clones every dependency, and one of them is a FULL clone:
+      # aomedia.googlesource.com refuses a single-commit fetch, so
+      # scripts/lib/common.sh fetch_git falls back to `fetch --tags` for
+      # libaom. That is several hundred MB downloaded seven times per run.
+      #
+      # This cache is CORRECTNESS-NEUTRAL by construction, which is the only
+      # reason it is here at all: scripts/fetch-sources.sh re-verifies
+      # everything it finds. fetch_tarball re-hashes a cached archive and
+      # refetches on mismatch; fetch_git compares `git rev-parse HEAD` against
+      # the pinned commit and re-clones on mismatch. A stale, partial or
+      # corrupted cache can therefore only cost time, never change what gets
+      # built. The key includes hashFiles('versions.lock') so a pin bump
+      # starts a new entry, and the restore-key fallback lets a bump reuse the
+      # unchanged 90% of the previous one.
+      #
+      # Only build/sources is cached -- the verified INPUTS. The extracted
+      # FFmpeg tree, $PREFIX_DIR and the object trees are NOT: caching built
+      # artefacts would mean trusting a stamp file (build-deps.sh:52-55) that
+      # keys on the dependency's commit alone and knows nothing about the
+      # compiler, the flags or a half-finished build from a cancelled job.
+      - name: Cache pinned sources
+        uses: actions/cache@v4
+        with:
+          path: build/sources
+          key: tas-ffmpeg-src-${{ runner.os }}-${{ hashFiles('versions.lock') }}
+          restore-keys: tas-ffmpeg-src-${{ runner.os }}-
+
+      # --- Windows: MSYS2 / mingw64 -------------------------------------
+      # FFmpeg cannot be built with MSVC. The DLLs are still consumed from
+      # MSVC by nelux, which regenerates import libs from our .def files.
+      - name: Set up MSYS2
+        if: matrix.name == 'win64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel git curl zip unzip
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-yasm
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-pkgconf
+
+      - name: Build (Windows)
+        if: matrix.name == 'win64'
+        shell: msys2 {0}
+        env:
+          TARGET_ARCH: ${{ matrix.target_arch }}
+        run: ./scripts/build.sh
+
+      # --- Linux: manylinux_2_28 container -------------------------------
+      # MUST be this image. nelux ships manylinux_2_28 wheels and auditwheel
+      # rejects any bundled .so referencing a glibc newer than 2.28.
+      # The base image comes from versions.lock -- nothing in this workflow
+      # hardcodes it. Same Dockerfile for both arches; it skips nasm/yasm and
+      # libva on aarch64 via TARGETARCH.
+      - name: Build Linux image
+        if: matrix.container
+        run: |
+          IMAGE="$(sed -n 's/^${{ matrix.lock_key }}=//p' versions.lock)"
+          [ -n "$IMAGE" ] || { echo "::error::${{ matrix.lock_key }} missing from versions.lock"; exit 1; }
+          echo "base image: $IMAGE"
+          docker build -f docker/Dockerfile.manylinux_2_28 \
+            --platform ${{ matrix.docker_platform }} \
+            --build-arg MANYLINUX_IMAGE="$IMAGE" \
+            -t tas-ffmpeg-${{ matrix.name }} .
+
+      - name: Build (Linux, manylinux_2_28)
+        if: matrix.container
+        run: |
+          docker run --rm --platform ${{ matrix.docker_platform }} \
+            -v "$PWD:/work" -w /work \
+            -e TARGET_ARCH=${{ matrix.target_arch }} \
+            tas-ffmpeg-${{ matrix.name }} ./scripts/build.sh
+
+      # --- macOS ---------------------------------------------------------
+      - name: Install macOS build tools
+        if: startsWith(matrix.name, 'macos')
+        run: |
+          brew update
+          # autoconf/automake/libtool are NOT optional and NOT already on the
+          # image: zimg ships no pre-generated configure, so
+          # scripts/build-deps.sh build_zimg runs ./autogen.sh, which runs
+          # `autoreconf -if`. Without them the macOS legs died ~25-40 minutes
+          # in, after x264, x265, dav1d, SVT-AV1, libaom, libvpx and opus had
+          # all been built, with "autoreconf: command not found".
+          #
+          # Homebrew installs GNU libtool's programs as `glibtool`/
+          # `glibtoolize` precisely so they cannot shadow Apple's
+          # /usr/bin/libtool (a completely different tool, which
+          # scripts/build-deps.sh uses to merge the three x265 archives).
+          # Do NOT "fix" the naming by putting
+          # $(brew --prefix libtool)/libexec/gnubin on PATH -- that shadows
+          # /usr/bin/libtool and silently breaks the x265 multilib merge.
+          # build_zimg instead exports LIBTOOLIZE=glibtoolize, which is the
+          # variable autoreconf looks the tool up through.
+          brew install nasm cmake ninja meson pkg-config autoconf automake libtool
+          # NOTE: these Homebrew tools are BUILD tools only -- nothing from
+          # Homebrew is linked into the artefacts. Every shipped library is
+          # built from the pinned source in versions.lock, and
+          # scripts/verify-output.sh's macOS allowlist FAILS the build if any
+          # /opt/homebrew or /usr/local path appears in `otool -L`.
+
+      - name: Build (macOS)
+        if: startsWith(matrix.name, 'macos')
+        env:
+          TARGET_ARCH: ${{ matrix.target_arch }}
+        run: ./scripts/build.sh
+
+      # --- Artefacts -----------------------------------------------------
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.name }}
+          path: |
+            dist/*.zip
+            dist/*.tar.xz
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Corresponding source. Built ONCE, on any runner, because it contains no
+  # compiled output -- only pinned sources and this repository.
+  # Publishing it is a GPL obligation, not a nice-to-have: we link x264 and
+  # x265, so the binaries are GPL and a source offer must point somewhere real.
+  # -------------------------------------------------------------------------
+  source:
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache pinned sources
+        uses: actions/cache@v4
+        with:
+          path: build/sources
+          key: tas-ffmpeg-src-${{ runner.os }}-${{ hashFiles('versions.lock') }}
+          restore-keys: tas-ffmpeg-src-${{ runner.os }}-
+      - run: ./scripts/fetch-sources.sh
+      - run: ./scripts/corresponding-source.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-source
+          path: dist/*.tar.xz
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  release:
+    needs: [build, source]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: staged
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Collect and checksum
+        run: |
+          mkdir -p dist
+          find staged -type f \( -name '*.zip' -o -name '*.tar.xz' \) -exec mv {} dist/ \;
+          # Single authoritative SHA256SUMS, computed here rather than merging
+          # the per-job ones, so the published file is guaranteed consistent.
+          ( cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS )
+
+      - name: Emit consumer pin file
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/emit-consumer-pin.sh "${GITHUB_REF_NAME}"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.tar.xz
+            dist/SHA256SUMS
+            dist/ffmpeg-pin.lock
+          body: |
+            FFmpeg built from source, pinned and reproducible.
+
+            **One build serves both consumers** (nelux and TheAnimeScripter).
+            There is no `--build-suffix`, so the libraries are named
+            `avcodec-62.dll` etc. That is safe **only** while both consumers
+            use the *same* release — identical builds can be co-loaded in one
+            process, mismatched ones cannot, and nothing at the OS level
+            prevents it.
+
+            * Vendor `ffmpeg-pin.lock` in each consumer instead of
+              hand-mirroring URLs and hashes.
+            * Assert `manifest.json` -> `av_version_info` at startup and fail
+              loudly on mismatch.
+
+            **Licence:** GPL-2.0-or-later (x264 + x265 are linked).
+            Corresponding source is published in this release as
+            `tas-ffmpeg-*-corresponding-source.tar.xz`.

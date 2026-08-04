@@ -1,0 +1,81 @@
+# ===========================================================================
+# flags/ffmpeg.linux.flags -- Linux x86_64.
+#
+# BUILT INSIDE manylinux_2_28 (glibc 2.28 / AlmaLinux 8), NOT Ubuntu.
+# nelux ships manylinux_2_28 wheels. auditwheel inspects every bundled .so and
+# REJECTS the wheel if a symbol is versioned against a newer glibc. Building
+# on ubuntu-latest yields libavutil.so.60 referencing GLIBC_2.34 and breaks
+# `auditwheel repair` for the WHOLE wheel, not just for FFmpeg.
+# See docker/Dockerfile.manylinux_2_28. scripts/verify-output.sh asserts the
+# glibc floor after every build so this cannot regress silently.
+# ===========================================================================
+
+# MANDATORY -- --disable-autodetect (ffmpeg.flags) turns off THREADS_LIST.
+--enable-pthreads                             # both
+
+# --- NVIDIA (same reasoning as Windows) ------------------------------------
+--enable-ffnvcodec                            # both
+--enable-cuda                                 # both
+--enable-nvenc                                # both
+--enable-nvdec                                # nelux
+--enable-cuvid                                # nelux
+
+# --- Intel QSV -------------------------------------------------------------
+# On Linux the QSV hwcontext creates a VAAPI CHILD DEVICE at runtime, so VAAPI
+# must also be compiled in or `-init_hw_device qsv` fails even though the
+# encoders exist. libva-devel is installed in the Dockerfile.
+--enable-libvpl                               # both
+--enable-vaapi                                # both -- required by QSV on Linux, not optional
+
+# --- AMD AMF ---------------------------------------------------------------
+# Uses the amdgpu-pro / Mesa AMF runtime. Header-only at build time.
+--enable-amf                                  # TAS
+
+# ===========================================================================
+# TLS -- GnuTLS, built from pinned source. NOT LibreSSL.
+# ===========================================================================
+# WHY TLS AT ALL: Theanimescripter/src/ytdlp.py:184 and :202 set
+#     "ffmpeg_location": os.path.dirname(FFMPEGPATH)
+# which points yt-dlp at OUR ffmpeg. TAS sets neither --downloader nor
+# hls_prefer_native anywhere (0 hits across all three repos), so yt-dlp's
+# defaults apply and it falls back to FFmpegFD -- spawning our ffmpeg with an
+# `https://...m3u8` URL -- for live / live-from-start formats, which
+# processUrlInput (src/io/inputNormalization.py:19-22) accepts. Without a TLS
+# backend that fails with "Protocol not found" on Linux and succeeds on
+# Windows/macOS, which is exactly the per-platform divergence this repo
+# exists to remove.
+#
+# WHY NOT LibreSSL -- ffmpeg-8.1.2/configure:7382-7383 reads:
+#     enabled libtls && require_pkg_config libtls libtls tls.h tls_configure &&
+#         { enabled gpl && ! enabled nonfree &&
+#           die "ERROR: LibreSSL is incompatible with the gpl"; }
+# LibreSSL is HARD-REJECTED in any --enable-gpl build. The often-repeated
+# "libtls is ISC-licensed so it is GPLv2-compatible" is true of the licence
+# and false of this configure. Verified against the pinned tarball, not
+# assumed.
+#
+# WHY NOT OpenSSL -- configure:7493-7495 rejects BOTH directions under gpl:
+#     >= 3.0  -> "requires --enable-version3"   (we refuse version3)
+#     <  3.0  -> "is incompatible with the gpl"
+# WHY NOT mbedtls -- EXTERNAL_LIBRARY_VERSION3_LIST (configure:2007-2016),
+# so it would force GPLv3.
+#
+# GnuTLS is the only remaining option and it is clean: configure:7231 gates it
+# on nothing but pkg-config, it is NOT in the version3 list, and it has no
+# gpl conflict. LGPL-2.1-or-later.
+#
+# It is NOT taken from the manylinux image. gmp, nettle and gnutls are pinned
+# in versions.lock and built as STATIC libraries from source (build-deps.sh
+# build_gnutls), with --with-included-libtasn1, --with-included-unistring and
+# --without-p11-kit, so the shipped libavformat.so acquires no new runtime
+# .so dependency. verify-output.sh's import allowlist enforces that.
+# gmp and nettle are both dual LGPLv3+/GPLv2+; we take the GPLv2+ arm, which
+# keeps the output at GPL-2.0-or-later.
+--enable-gnutls                               # TAS
+
+# --- Deliberately NOT enabled ----------------------------------------------
+# vdpau      -- superseded by nvdec, nothing references it
+# libdrm     -- only for VAAPI DRM-prime interop, which neither consumer does
+# v4l2_m2m   -- capture/codec devices, unused
+# alsa / sndio / xlib / libxcb -- capture devices; each would add an unpinned
+#               system .so to the runtime dependency closure of a shared build

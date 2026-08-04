@@ -1,0 +1,9 @@
+# Build intermediates and outputs. Everything here is reproducible from
+# versions.lock + flags/ + scripts/, so none of it belongs in git.
+/build/
+/dist/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp

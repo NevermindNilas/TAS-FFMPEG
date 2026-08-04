@@ -1,0 +1,290 @@
+# ===========================================================================
+# flags/required-components.txt
+#
+# THE CONTRACT. Every line is a component one of the two consumers actually
+# reaches, with file:line evidence in the trailing comment. After every build
+# scripts/verify-output.sh interrogates the BUILT ffmpeg binary
+# (`ffmpeg -encoders`, `-decoders`, `-muxers`, `-demuxers`, `-filters`,
+# `-protocols`, `-bsfs`, `-devices`) and fails the build if any of these is
+# absent on the platform it applies to.
+#
+# This is the difference between "we think the flags are right" and "the build
+# proves it". flags/*.flags say what we ASKED configure for;
+# --disable-autodetect, a missing header, a silently-failing dep or a renamed
+# component can all make configure quietly give us less. Only the binary knows.
+#
+# ---------------------------------------------------------------------------
+# FORMAT
+#     <kind>  <name>  <platforms>      # <provenance> -- <evidence>
+#
+#   kind      encoder | decoder | muxer | demuxer | filter | protocol
+#             | bsf | device
+#   name      THE CLI NAME, as `ffmpeg -encoders` prints it -- NOT the
+#             configure name. They differ, and that is the entire point:
+#             configure calls it `movtext`, `ffmpeg` calls it `mov_text`;
+#             configure `libaom_av1`, ffmpeg `libaom-av1`; configure
+#             `image_png_pipe`, ffmpeg `png_pipe`. flags/*.flags use the
+#             configure spelling and scripts/validate-flags.sh checks THOSE;
+#             this file uses the spelling a user types and verify-output.sh
+#             checks THESE. Both are needed.
+#   platforms `all`, or a comma-separated list of `<os>` / `<os>/<arch>`
+#             tokens, optionally prefixed with `!` to subtract. Evaluated
+#             left to right. Known platforms:
+#                 windows/x86_64
+#                 linux/x86_64  linux/arm64
+#                 macos/x86_64  macos/arm64
+#             e.g. `all,!macos`            everything except macOS
+#                  `windows,linux/x86_64`  Windows plus Linux x86_64 only
+#
+# Demuxer names are matched against each comma-separated component of what
+# ffmpeg prints, because ffmpeg lists one demuxer as
+# `mov,mp4,m4a,3gp,3g2,mj2`. So `demuxer mov` and `demuxer mp4` both match it.
+#
+# ADDING A LINE: only with evidence. A component nobody reaches does not
+# belong here -- it would make the build fragile for no gain, and the union
+# rule already keeps every default-on component in the binary anyway.
+# ===========================================================================
+
+
+# ===========================================================================
+# ENCODERS -- video, software, every platform
+# ===========================================================================
+encoder libx264       all   # both -- TAS 12 matchEncoder presets (encodingSettings.py:10-77,273-283); nelux tests (82 refs) + default-encoder probe (VideoEncoder.cpp:45,48,51)
+encoder libx264rgb    all   # nelux -- Encoder.cpp:1191; tests/pixfmt_matrix_bench.py:69-71
+encoder libx265       all   # both -- TAS x265* presets (encodingSettings.py:78-123); nelux Encoder.cpp:1192,1218
+encoder libopenh264   all   # nelux -- LAST entry of the default-encoder probe, VideoEncoder.cpp:46,49,51
+encoder libsvtav1     all   # both -- TAS av1/slow_av1 (encodingSettings.py:212-240); nelux Encoder.cpp:1193,1276,1497
+encoder libaom-av1    all   # both -- nelux Encoder.cpp:1194,1244; tests/test_software_encoders.py:83
+encoder libvpx-vp9    all   # both -- TAS `vp9` preset (encodingSettings.py:268); nelux tests/test_codec_container_parity.py:27
+encoder libvpx        all   # nelux -- VP8, tests/test_codec_container_parity.py:26
+encoder prores_ks     all   # both -- TAS prores/prores_segment presets (encodingSettings.py:264-265)
+encoder prores        all   # nelux -- tests/utils/generate_test_videos.py:17-18
+encoder prores_aw     all   # nelux -- tests/output/gray_all_codecs.py:56
+encoder mpeg4         all   # nelux -- tests/test_codec_container_parity.py:29
+encoder mpeg2video    all   # nelux -- tests/output/gray_all_codecs.py:51
+encoder mpeg1video    all   # nelux -- tests/output/gray_all_codecs.py:51
+encoder ffv1          all   # nelux -- tests/test_color_format.py:137,156,174,192; README.md:221
+encoder ffvhuff       all   # nelux -- tests/output/gray_all_codecs.py:53
+encoder huffyuv       all   # nelux -- tests/output/gray_all_codecs.py:53
+encoder utvideo       all   # nelux -- tests/output/gray_all_codecs.py:54
+encoder dnxhd         all   # nelux -- tests/output/gray_all_codecs.py:57
+encoder rawvideo      all   # both -- nelux scripts/bench_end_to_end.py:78 + the libvmaf reference write; TAS `-f null` sink
+encoder gif           all   # TAS -- `gif` preset, encodingSettings.py:266-267
+encoder png           all   # both -- TAS `png` preset (encodingSettings.py:297-305) + PNG sequences (ffmpegSettings.py:492-507); nelux tests
+encoder apng          all   # nelux -- tests/output/gray_all_codecs.py:116-122
+encoder mjpeg         all   # TAS -- thumbnails, probe.ts:212, MediaBrowserTab.tsx:798, autoCutReviewOrchestrator.ts:344
+encoder tiff          all   # nelux -- inputOutputHandler-style still outputs; tests/output/gray_all_codecs.py:116-122
+encoder bmp           all   # nelux -- tests/output/gray_all_codecs.py:116-122
+encoder qtrle         all   # nelux -- tests/output/gray_all_codecs.py:116-122
+encoder v210          all   # nelux -- tests/output/gray_all_codecs.py:116
+encoder zlib          all   # nelux -- tests/output/gray_all_codecs.py:116-122 (also proves --enable-zlib took)
+
+# ENCODERS -- audio + subtitle
+# nelux's audio transcode probe is Encoder.cpp:398-400 in that order; the
+# subtitle probe is Encoder.cpp:525-527. AV_CODEC_ID_MP3 is deliberately NOT
+# here -- see the MP3 block in flags/ffmpeg.flags.
+encoder aac           all   # both -- nelux Encoder.cpp:398 (1st audio candidate); TAS ffmpegSettings.py:851-859
+encoder libopus       all   # both -- TAS `.webm` -> `-c:a libopus` (ffmpegSettings.py:848); nelux AV_CODEC_ID_OPUS Encoder.cpp:398
+encoder vorbis        all   # nelux -- AV_CODEC_ID_VORBIS, Encoder.cpp:399; the aac->.webm transcode test asserts opus OR vorbis (tests/test_transcode.py:73-83)
+encoder ac3           all   # nelux -- AV_CODEC_ID_AC3, Encoder.cpp:400
+encoder flac          all   # nelux -- AV_CODEC_ID_FLAC, Encoder.cpp:400
+encoder pcm_s16le     all   # nelux -- .wav output, examples/comfyui_nelux_nodes/__init__.py:857,868
+encoder mov_text      all   # both -- nelux Encoder.cpp:525 (test asserts mov_text/tx3g, tests/test_transcode.py:103); TAS ffmpegSettings.py:851-859
+encoder webvtt        all   # both -- nelux Encoder.cpp:525; TAS `.webm` -> `-c:s webvtt` (ffmpegSettings.py:848)
+encoder ass           all   # nelux -- AV_CODEC_ID_ASS, Encoder.cpp:526
+encoder ssa           all   # nelux -- AV_CODEC_ID_SSA, Encoder.cpp:504
+encoder subrip        all   # nelux -- AV_CODEC_ID_SUBRIP, Encoder.cpp:526
+encoder text          all   # nelux -- AV_CODEC_ID_TEXT, Encoder.cpp:527
+
+# ENCODERS -- NVIDIA NVENC.
+# No macOS CUDA driver past 10.13, so NVENC is everything-but-macOS. It IS
+# kept on linux/arm64: NVIDIA ships aarch64 Linux drivers and ffnvcodec is
+# pure stub headers.
+encoder h264_nvenc    all,!macos   # both -- TAS nvenc_h264/slow/lossless presets (encodingSettings.py:124-140,284-296); nelux Encoder.hpp:22
+encoder hevc_nvenc    all,!macos   # both -- TAS nvenc_h265* (encodingSettings.py:141-171); nelux Encoder.hpp:23
+encoder av1_nvenc     all,!macos   # both -- TAS nvenc_av1/slow_nvenc_av1 (encodingSettings.py:193-210); nelux Encoder.hpp:24
+
+# ENCODERS -- Intel QSV. x86_64 only: no aarch64 or macOS oneVPL runtime.
+encoder h264_qsv      windows,linux/x86_64   # both -- TAS qsv_h264 (encodingSettings.py:172-175); nelux tests/test_comfyui_nodes.py:446
+encoder hevc_qsv      windows,linux/x86_64   # both -- TAS qsv_h265/qsv_h265_10bit (encodingSettings.py:176-192)
+encoder vp9_qsv       windows,linux/x86_64   # TAS -- qsv_vp9 preset, encodingSettings.py:270-271
+encoder av1_qsv       windows,linux/x86_64   # nelux -- examples/comfyui_nelux_nodes/__init__.py:506,534-536
+encoder mpeg2_qsv     windows,linux/x86_64   # nelux -- examples/comfyui_nelux_nodes/__init__.py:506
+
+# ENCODERS -- AMD AMF. No aarch64 and no macOS runtime.
+encoder h264_amf      windows,linux/x86_64   # TAS -- h264_amf preset, encodingSettings.py:241-244
+encoder hevc_amf      windows,linux/x86_64   # TAS -- hevc_amf/hevc_amf_10bit, encodingSettings.py:245-263
+
+# ENCODERS -- OS-native video toolchains.
+encoder h264_mf       windows   # nelux -- FIRST entry of the Windows default-encoder probe, VideoEncoder.cpp:45
+encoder hevc_mf       windows   # nelux -- tests/output/gray_all_codecs.py:47
+encoder h264_videotoolbox   macos   # nelux -- macOS default-encoder probe, VideoEncoder.cpp:48
+encoder hevc_videotoolbox   macos   # union -- the only other macOS hw encoder; reachable from --custom_encoder
+encoder prores_videotoolbox macos   # union -- same
+
+
+# ===========================================================================
+# DECODERS
+#
+# Nelux/README.md:237 promises "anything libavcodec can decode", so nothing is
+# ever disabled. Listed here are the ones with concrete evidence: nelux's
+# metadata corpus (tests/data/metadata_corpus/{A,C,D}), its decoder preference
+# chain, and TAS's copy/transcode paths.
+# ===========================================================================
+decoder h264          all   # both -- corpus A_h264_*; every TAS input
+decoder hevc          all   # both -- corpus A_hevc_*
+decoder av1           all   # nelux -- 3rd in the AV1 chain, Decoder.cpp:151
+decoder libdav1d      all   # nelux -- FIRST in the AV1 chain, Decoder.cpp:151
+decoder libaom-av1    all   # nelux -- SECOND in the AV1 chain, Decoder.cpp:151
+decoder vp8           all   # nelux -- corpus A_vp8_{mkv,webm}
+decoder vp9           all   # nelux -- corpus A_vp9_{mkv,webm}
+decoder mpeg2video    all   # nelux -- corpus A_mpeg2_*
+decoder mpeg4         all   # nelux -- corpus A_mpeg4_*
+decoder mpeg1video    all   # nelux -- CUVID table parity, cuda/Decoder.cpp:523
+decoder vc1           all   # nelux -- CUVID table parity, cuda/Decoder.cpp:532
+decoder prores        all   # nelux -- corpus A_prores_{mkv,mov}
+decoder dnxhd         all   # nelux -- corpus A_dnxhr_{mkv,mov}
+decoder ffv1          all   # nelux -- corpus A_ffv1_{avi,mkv,mov}
+decoder huffyuv       all   # nelux -- corpus A_huffyuv_{avi,mkv}
+decoder mjpeg         all   # nelux -- corpus A_mjpeg_{avi,mkv,mov}
+decoder rawvideo      all   # nelux -- corpus A_rawvideo_{avi,y4m}; HARD-THROWS if missing, cuda/Decoder.cpp:640-643
+decoder png           all   # nelux -- PNG stills in tests
+decoder gif           all   # TAS -- .gif accepted by inputOutputHandler.py:6-8
+decoder aac           all   # both -- corpus D_*aac*.mp4; TAS `-c:a copy`/transcode
+decoder mp3           all   # both -- corpus D_*mp3*.mp4 (this is why MP3 *decode* matters and MP3 *encode* does not)
+decoder flac          all   # nelux -- corpus D_*flac*.mkv
+decoder opus          all   # nelux -- corpus D_*opus*.webm
+decoder vorbis        all   # nelux -- matroska/webm audio
+decoder ac3           all   # union -- extremely common in user media
+decoder eac3          all   # union -- same
+decoder pcm_s16le     all   # nelux -- .wav corpus
+decoder subrip        all   # nelux -- corpus D_subtitle_srt.mkv; Encoder.cpp:509
+decoder mov_text      all   # nelux -- corpus D_subtitle_movtext.mp4
+decoder webvtt        all   # nelux -- Encoder.cpp:505
+decoder ass           all   # nelux -- Encoder.cpp:504
+
+# DECODERS -- NVIDIA CUVID. The complete nine-entry table nelux resolves by
+# name at cuda/Decoder.cpp:560, throwing at :570 when one is missing.
+decoder h264_cuvid    all,!macos   # nelux -- cuda/Decoder.cpp:509
+decoder hevc_cuvid    all,!macos   # nelux -- cuda/Decoder.cpp:512
+decoder vp8_cuvid     all,!macos   # nelux -- cuda/Decoder.cpp:515
+decoder vp9_cuvid     all,!macos   # nelux -- cuda/Decoder.cpp:518
+decoder av1_cuvid     all,!macos   # nelux -- cuda/Decoder.cpp:521
+decoder mpeg1_cuvid   all,!macos   # nelux -- cuda/Decoder.cpp:524
+decoder mpeg2_cuvid   all,!macos   # nelux -- cuda/Decoder.cpp:527
+decoder mpeg4_cuvid   all,!macos   # nelux -- cuda/Decoder.cpp:530
+decoder vc1_cuvid     all,!macos   # nelux -- cuda/Decoder.cpp:533
+
+# DECODERS -- QSV.
+decoder h264_qsv      windows,linux/x86_64   # nelux -- QSV decode routing, examples/comfyui_nelux_nodes/__init__.py:410-411
+decoder hevc_qsv      windows,linux/x86_64   # nelux -- same
+
+
+# ===========================================================================
+# MUXERS
+# nelux writes only five (inferContainerFormat, Encoder.cpp:1509-1524); the
+# rest come from TAS and from the ffmpeg CLI both projects' tests drive.
+# ===========================================================================
+muxer mp4        all   # both -- nelux Encoder.cpp:1512; TAS default output
+muxer mov        all   # both -- nelux Encoder.cpp:1516; TAS _resolveExtension .mov for --segment/prores
+muxer matroska   all   # both -- nelux Encoder.cpp:1514
+muxer webm       all   # both -- nelux Encoder.cpp:1518; TAS WEBM_COMPATIBLE_ENCODERS
+muxer avi        all   # both -- nelux Encoder.cpp:1520
+muxer gif        all   # TAS -- `gif` preset + .gif output
+muxer image2     all   # TAS -- PNG sequences, ffmpegSettings.py:492-507
+muxer image2pipe all   # union -- the piped form of the same
+muxer mjpeg      all   # TAS -- `-f mjpeg -` thumbnail, probe.ts:212-213
+muxer null       all   # TAS -- `-f null -` benchmark sink, ffmpegSettings.py:638-640
+muxer ipod       all   # TAS -- .m4a audio-only output, youtubeDownloader.ts:774
+muxer flv        all   # TAS -- containerToExt, autoCutReviewOrchestrator.ts:258-271
+muxer mpegts     all   # TAS -- containerToExt (.ts)
+muxer ogg        all   # TAS -- containerToExt
+muxer mxf        all   # nelux -- dnxhd container, tests/output/gray_all_codecs.py:57
+muxer nut        all   # nelux -- tests/test_all_pixel_formats.py:13, scripts/bench_end_to_end.py:75
+muxer wav        all   # nelux -- examples/comfyui_nelux_nodes/__init__.py:857,868
+muxer rawvideo   all   # both -- the libvmaf reference write, tests/test_software_encoders.py:273-275
+
+
+# ===========================================================================
+# DEMUXERS
+# ===========================================================================
+demuxer mov          all   # both -- every .mp4/.mov input (ffmpeg prints this as `mov,mp4,m4a,3gp,3g2,mj2`)
+demuxer mp4          all   # both -- same entry, matched component-wise
+demuxer matroska     all   # both -- .mkv (`matroska,webm`)
+demuxer webm         all   # both -- same entry
+demuxer avi          all   # both -- corpus A_*_avi
+demuxer rawvideo     all   # TAS -- the ONLY explicit input -f, ffmpegSettings.py:627-636,681-699
+demuxer image2       all   # union -- image sequence input
+demuxer png_pipe     all   # TAS -- piped PNG input (configure calls this image_png_pipe)
+demuxer gif          all   # TAS -- .gif input
+demuxer mjpeg        all   # TAS -- MJPEG input
+demuxer flv          all   # TAS -- containerToExt round trip
+demuxer mpegts       all   # both -- corpus A_h264_ts, A_hevc_ts, A_mpeg2_ts
+demuxer ogg          all   # TAS -- containerToExt round trip
+demuxer yuv4mpegpipe all   # nelux -- corpus A_rawvideo_y4m
+demuxer nut          all   # nelux -- corpus D_nv12.nut, D_rgb24.nut; tests/test_all_pixel_formats.py:13
+demuxer wav          all   # nelux -- .wav corpus
+demuxer mp3          all   # union -- bare .mp3 input
+demuxer hls          all   # TAS -- yt-dlp FFmpegFD spawns our ffmpeg on an m3u8, ytdlp.py:184,202
+demuxer concat       all   # union -- reachable from --custom_encoder
+
+
+# ===========================================================================
+# FILTERS
+# ===========================================================================
+filter scale        all   # both -- TAS ffmpegSettings.py:760-763,792-796; probe.ts:211
+filter format       all   # both -- TAS ffmpegSettings.py:765-770,794
+filter setparams    all   # TAS -- ffmpegSettings.py:792-796
+filter zscale       all   # TAS -- the BT.2020 path, ffmpegSettings.py:797 (proves --enable-libzimg took)
+filter null         all   # union
+filter anull        all   # union
+filter copy         all   # union
+filter psnr         all   # nelux -- tests/benchmark_quality.py:26-28
+filter ssim         all   # nelux -- tests/benchmark_quality.py:26-28
+filter libvmaf      all   # nelux -- tests/test_software_encoders.py:181 RAISES at :198 without it (proves --enable-libvmaf took)
+filter testsrc      all   # nelux -- test media generation, tests/test_codec_container_parity.py:40-41
+filter testsrc2     all   # nelux -- same
+filter mandelbrot   all   # nelux -- tests/benchmark_decode_throughput.py:34-35
+filter color        all   # union -- lavfi source
+filter nullsrc      all   # union -- lavfi source
+filter hwupload_cuda  all,!macos   # TAS -- ffmpegSettings.py:734-738 (deps are ffnvcodec only, configure:3518)
+filter hwdownload     all,!macos   # union -- the inverse of the above
+
+
+# ===========================================================================
+# PROTOCOLS
+# https/tls exist on every platform: Schannel on Windows, SecureTransport on
+# macOS, GnuTLS on Linux. See flags/ffmpeg.linux.flags for why Linux needs it.
+# ===========================================================================
+protocol file    all   # both -- every in-process open; nelux Encoder.cpp:249
+protocol pipe    all   # both -- TAS pipe:0/pipe:1; nelux tests/test_batch_color_matrix.py:46
+protocol http    all   # TAS -- yt-dlp FFmpegFD, ytdlp.py:184,202
+protocol https   all   # TAS -- same; this is the assertion that catches "Linux lost its TLS backend"
+protocol tls     all   # TAS -- what https is built on
+protocol tcp     all   # TAS -- what tls is built on
+protocol crypto  all   # TAS -- AES-128 HLS segments
+protocol concat  all   # union -- reachable from --custom_encoder
+protocol data    all   # union -- same
+
+
+# ===========================================================================
+# BITSTREAM FILTERS
+# Neither consumer names one explicitly, but every `-c copy` remux path and
+# nelux's Encoder::setupCopyStream (Encoder.cpp:360-378, no BSF of its own)
+# depends on avformat auto-inserting these.
+# ===========================================================================
+bsf aac_adtstoasc     all   # TAS -- ADTS AAC into mp4/mov, autoCutReviewOrchestrator.ts:371-374
+bsf h264_mp4toannexb  all   # TAS -- mp4 -> mpegts/annexb copy
+bsf hevc_mp4toannexb  all   # TAS -- same for HEVC
+bsf vp9_superframe    all   # TAS -- VP9 copy into webm/mp4
+bsf extract_extradata all   # both -- global-header muxers
+bsf dump_extra        all   # union -- NB the CLI name is `dump_extra`; configure calls it `dump_extradata`. Same trap as mov_text/movtext.
+bsf av1_frame_split   all   # TAS -- AV1 copy paths
+bsf mov2textsub       all   # nelux -- mov_text subtitle transcode, Encoder.cpp:497-581
+bsf text2movsub       all   # nelux -- the other direction
+
+
+# ===========================================================================
+# DEVICES
+# ===========================================================================
+device lavfi   all   # nelux -- `-f lavfi` test-media generation (tests/test_codec_container_parity.py:40-41). This is an INDEV, so it is the one thing that genuinely needs --enable-avdevice.

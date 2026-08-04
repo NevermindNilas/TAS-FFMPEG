@@ -1,0 +1,399 @@
+# ===========================================================================
+# flags/ffmpeg.flags -- portable configure flags. ONE build serves BOTH
+# consumers.
+#
+# Format: one configure flag per line. `#` starts a comment; blank lines
+# ignored. Files are concatenated by scripts/lib/flags.sh in this order, and
+# FFmpeg's configure is LAST-WINS for enable/disable, so later files override:
+#
+#     flags/ffmpeg.flags
+#     flags/ffmpeg.<os>.flags
+#     flags/ffmpeg.<os>.<arch>.flags      (optional; only linux.arm64 exists)
+#
+# Every option name AND every component name in these files is checked by
+# scripts/validate-flags.sh against the actual pinned FFmpeg source, so a typo
+# fails CI instead of silently shipping a build without the feature. That
+# check is not theoretical: `--enable-encoder=mov_text` is accepted by
+# configure's parser and does nothing, because the configure-time name is
+# `movtext`.
+#
+# PROVENANCE TAGS on each line:
+#     # nelux  -- required by the nelux Python wheel (D:\Nelux)
+#     # TAS    -- required by TheAnimeScripter and its two front-ends
+#     # both   -- required by both
+#     # union  -- required by neither today; included under the union rule
+#                 because it is free and a consumer could plausibly reach it
+#
+# UNION RULE (owner's decision): if either consumer needs a feature, it is in.
+# Do not trim this file for size. The decisive argument is
+# Theanimescripter/src/cli/parser.py:1278-1280 -- `--custom_encoder` is a
+# free-text argument with no `choices=`, whitespace-split at
+# src/io/ffmpegSettings.py:825 and spliced verbatim into the command line at
+# :744, where it REPLACES matchEncoder()'s output entirely. TAS-Standalone
+# re-exports it as free text (src/shared/schema.ts:462). The required feature
+# set is therefore UNBOUNDED BY CONSTRUCTION and no static analysis can close
+# it. See README.md#custom-encoder.
+# ===========================================================================
+
+# ===========================================================================
+# 1. Licensing
+# ===========================================================================
+# GPL is a deliberate choice by the owner: libx264 and libx265 are both
+# GPL-licensed and both are required. nelux's test suite encodes with them
+# (82 and 30 references across Nelux/tests/*.py), and TheAnimeScripter's
+# matchEncoder() emits `-c:v libx264` / `-c:v libx265` for 12 of its 37
+# presets (Theanimescripter/src/io/encodingSettings.py:10-123).
+--enable-gpl                                  # both
+
+# We deliberately do NOT pass --enable-version3.
+#
+# ffmpeg-8.1.2/configure:2007-2016 defines EXTERNAL_LIBRARY_VERSION3_LIST as
+# exactly: gmp, libaribb24, liblensfun, libopencore_amrnb, libopencore_amrwb,
+# libvo_amrwbenc, mbedtls, rkmpp. We enable NONE of them, so nothing forces
+# version3 on us.
+#
+# configure:4773 reads:
+#     enabled version3 && { enabled gpl && enable gplv3 || enable lgplv3; }
+# so --enable-version3 together with --enable-gpl would relicense the whole
+# binary as GPLv3. Staying off it keeps the output at "GPL v2 or later" --
+# strictly the better position, because it stays combinable with GPLv2-only
+# code. x264's COPYING is the plain GPLv2 text and upstream now maintains an
+# explicit `GPLv2-only` branch, so this is not hypothetical.
+#
+# Consequence, enforced in the per-OS files: we must NOT enable OpenSSL >= 3.0.
+# configure:7493 hard-fails that combination:
+#     { enabled gplv3 || ! enabled gpl || enabled nonfree
+#       || die "ERROR: OpenSSL >=3.0.0 requires --enable-version3"; }
+
+# NEVER enable --enable-nonfree: the output would be undistributable, which
+# breaks both consumers' distribution model. Stated as an explicit disable so
+# an accidental re-enable shows up as a conflict in review.
+--disable-nonfree                             # both
+
+# ===========================================================================
+# 2. What gets built
+# ===========================================================================
+# ALL SEVEN LIBRARIES. Under the union rule this is settled by TAS: the ffmpeg
+# CLI itself requires avfilter, and TAS uses -vf on nearly every invocation
+# (zscale at Theanimescripter/src/io/ffmpegSettings.py:797, hwupload_cuda at
+# :737). avdevice comes along for `-f lavfi` / `-f gdigrab` style
+# --custom_encoder input.
+#
+# FOR THE RECORD -- the nelux LIBRARY does not call into avfilter or
+# avdevice. Verified: Nelux/include/Nelux/CxCore.hpp:43-45 includes
+# avfilter.h/buffersink.h/buffersrc.h and CxCore.hpp:97-103,126 define
+# AVFilterGraphDeleter / AVFilterGraphPtr, but a repo-wide grep returns those
+# two definitions and ZERO uses -- an unused unique_ptr deleter emits no code.
+# av_buffersrc_*, av_buffersink_* and avdevice_*: 0 hits in Nelux/src and
+# Nelux/include. Both are still hard-linked (CMakeLists.txt:307 lists all
+# seven and :313-319 FATAL_ERRORs on a missing .def; FFmpegDelayLoad.cpp:56
+# names them), so building all seven means nelux needs NO CMake change.
+#
+# avdevice is NOT merely a union courtesy though: nelux's TEST SUITE needs it.
+# Nelux/tests/test_codec_container_parity.py:38-42 generates its media with
+#     subprocess.run([FFMPEG, ..., "-f", "lavfi",
+#                     "-i", "testsrc2=size=...:rate=30", ...], check=True)
+# and `lavfi` is an INPUT DEVICE living in libavdevice. check=True means that
+# raises rather than skips. Six benchmark scripts do the same.
+# scripts/verify-output.sh asserts `device lavfi` after every build.
+--enable-avdevice                             # both
+--enable-avfilter                             # TAS
+--enable-swscale                              # both
+--enable-swresample                           # both
+
+# The CLI programs. Hard requirement for TAS:
+#   Theanimescripter/src/cli/startup.py:64-86 resolves
+#     <root>/ffmpeg_shared/ffmpeg[.exe] and .../ffprobe[.exe]
+#     and calls getFFMPEG() if EITHER is missing.
+#   src/autoclip/autoclip.py:73-89                    ffprobe -show_entries
+#   TAS-Standalone/src/main/tas/probe.ts:152          ffprobe -show_format
+#   TAS-AdobeEdition/src/js/main/utils/ffmpegBridge.ts:371  ffprobe likewise
+# Against shared libraries these two executables are small (see docs/SIZES.md).
+--enable-ffmpeg                               # TAS
+--enable-ffprobe                              # TAS
+# ffplay is used by nothing and would drag SDL2 into the dependency closure.
+--disable-ffplay                              # neither
+
+# SHARED libraries on every platform, and this is dictated by both consumers:
+#   * nelux BUNDLES libav*/libsw* inside its wheel and delay-loads them
+#     (Nelux/CMakeLists.txt:612-625 emits /DELAYLOAD per av*/sw* DLL).
+#   * Theanimescripter/src/infra/getFFMPEG.py:34-42 pins a `*-gpl-shared`
+#     archive and :316-335 FLATTENS its `bin/*` into <root>/ffmpeg_shared/,
+#     after which src/cli/startup.py:60-79 calls os.add_dll_directory() on
+#     that folder *specifically so nelux can delay-load from there*.
+# NOTE: on mingw, configure:6142-6145 force-disables static when shared is
+# enabled ("Cannot build both shared and static libs when using dllimport"),
+# so --disable-static is the honest, explicit spelling of what happens anyway.
+--enable-shared                               # both
+--disable-static                              # both
+
+# NO --build-suffix. Deliberate reversal of an earlier design.
+# Under the one-profile design, nelux's bundled copy and TAS's ffmpeg_shared
+# copy are byte-identical builds of the same FFmpeg, so it does not matter
+# which one Windows resolves first: same symbols, same ABI, no mismatch.
+# That safety holds ONLY while the two stay in lockstep -- see
+# README.md#drift and the manifest.json emitted by scripts/make-manifest.sh,
+# which exists so each consumer can assert at startup that the FFmpeg it
+# loaded is the one it expects.
+
+# ===========================================================================
+# 3. Build hygiene
+# ===========================================================================
+--disable-debug                               # both -- no -g; neither consumer debugs into libav*
+--disable-doc                                 # both -- man/html/texi not shipped
+--disable-htmlpages                           # both
+--disable-manpages                            # both
+--disable-podpages                            # both
+--disable-txtpages                            # both
+
+# ===========================================================================
+# 4. Determinism -- the most important flag in this file
+# ===========================================================================
+# Do NOT let configure pick up whatever happens to be installed on the build
+# machine. Every external library must be requested explicitly below, so an
+# unpinned system libmp3lame / libass / libvorbis can never silently enter the
+# binary and change its size, its ABI surface, or our licence obligations.
+--disable-autodetect                          # both
+
+# *** TRAP -- READ BEFORE EDITING ***
+# --disable-autodetect turns off AUTODETECT_LIBS, which ffmpeg-8.1.2/configure
+# defines as
+#     EXTERNAL_AUTODETECT_LIBRARY_LIST + HWACCEL_AUTODETECT_LIBRARY_LIST
+#     + THREADS_LIST
+# THREADS_LIST is "pthreads os2threads w32threads", so --disable-autodetect
+# silently produces a SINGLE-THREADED FFmpeg unless threading is re-enabled by
+# name. That is done in flags/ffmpeg.<os>.flags. Likewise zlib,
+# mediafoundation, schannel, securetransport, videotoolbox, amf, cuda, cuvid,
+# nvenc, nvdec, ffnvcodec, vaapi, d3d11va and dxva2 are ALL in those lists and
+# are ALL off until explicitly named.
+
+# zlib is mandatory, not optional: png/apng encode+decode, ffv1, flashsv, the
+# matroska/mov compressed-header paths and several image decoders need it.
+# Built from source as a static library (versions.lock ZLIB_*) so the produced
+# libav* DLLs never acquire a runtime dependency on MSYS2's zlib1.dll -- which
+# would be an ImportError on every nelux user's machine, since the wheel ships
+# only av*/sw*.
+--enable-zlib                                 # both
+
+# Matroska supports zlib/bzlib/lzma header stripping and track compression;
+# TIFF and several image decoders use lzma. Both consumers ingest arbitrary
+# user media.
+--enable-bzlib                                # both
+--enable-lzma                                 # both
+# Charset conversion for subtitle demuxers and non-UTF-8 metadata tags. TAS
+# transcodes subtitles to webvtt/mov_text (ffmpegSettings.py:860) and nelux
+# does subtitle passthrough (Nelux/src/Nelux/backends/Encoder.cpp:525-527).
+--enable-iconv                                # both
+
+# Runtime CPU dispatch stays ON. We must never bake in -march=native or an ISA
+# level: one artefact has to run on every x86-64 machine.
+--enable-runtime-cpudetect                    # both
+# PIC everywhere: required for ELF shared objects, and required because the
+# libraries get loaded into a Python process.
+--enable-pic                                  # both
+
+# NOTE: --enable-lto is deliberately NOT set. It is a known source of
+# miscompiles in FFmpeg's hand-written-asm interaction and of very long link
+# times against the x265 static blob, and it has never been measured here.
+
+# ===========================================================================
+# 5. Components -- everything default-on stays on
+# ===========================================================================
+# There is deliberately NO --disable-encoders / --disable-decoders /
+# --disable-muxers / --disable-demuxers / --disable-filters / --disable-bsfs
+# in this file. Under the union rule, and given the unbounded --custom_encoder
+# surface, trimming buys a few MB and costs unpredictable user-visible
+# "Unknown encoder" failures.
+#
+# The closed sets that static analysis DID prove are required are listed
+# below purely as documentation, and are asserted after every build by
+# scripts/verify-output.sh against the generated config.h.
+#
+# --- nelux ---------------------------------------------------------------
+#   DEFAULT ENCODER  a runtime PROBE, not a hardcoded name
+#                    (Nelux/src/Nelux/python/VideoEncoder.cpp:38-88):
+#                      Windows  h264_mf, libx264, libopenh264
+#                      macOS    libx264, h264_videotoolbox, libopenh264
+#                      Linux    libx264, libopenh264
+#                    Throws at :83-87 naming every candidate if none resolves.
+#                    All of them are built here, on the platforms where they
+#                    can exist, so the probe's FIRST entry always wins.
+#   NVENC names hardcoded at Nelux/include/Nelux/backends/Encoder.hpp:22-24:
+#                    h264_nvenc, hevc_nvenc, av1_nvenc
+#   AV1 decoder preference chain, Nelux/src/Nelux/backends/Decoder.cpp:151:
+#                    {"libdav1d", "libaom-av1", "av1"}
+#   CUVID table, Nelux/src/Nelux/backends/cuda/Decoder.cpp:509-533 (all nine):
+#                    h264_cuvid hevc_cuvid vp8_cuvid vp9_cuvid av1_cuvid
+#                    mpeg1_cuvid mpeg2_cuvid mpeg4_cuvid vc1_cuvid
+#   MUXERS -- the complete set nelux can emit, from inferContainerFormat()
+#             (Nelux/src/Nelux/backends/Encoder.cpp:1509-1524):
+#                    mp4 matroska mov webm avi  (everything else falls back to mp4)
+#   AUDIO transcode targets, Encoder.cpp:398-400:  AAC OPUS VORBIS MP3
+#   SUBTITLE transcode targets, Encoder.cpp:525-527: mov_text webvtt ass subrip
+#   TEST SUITE exercises: libx264 libx264rgb rawvideo h264_nvenc libx265 png
+#                    libsvtav1 hevc_nvenc libaom-av1 ffv1 h264_qsv libvpx-vp9
+#                    libvpx(vp8) hevc_qsv av1_qsv vp9_qsv av1_nvenc prores
+#                    prores_ks prores_aw mpeg4 mjpeg huffyuv ffvhuff utvideo
+#                    dnxhd h264_mf hevc_mf h264_amf hevc_amf
+#   PROTOCOLS: `file` alone for the LIBRARY. Zero URL-scheme literals in
+#                    Nelux/src or Nelux/include; avio_open (Encoder.cpp:249)
+#                    and avformat_open_input (Encoder.cpp:292, Decoder.cpp:
+#                    416/502/2148) always take a plain local path, and
+#                    Encoder.cpp:229-239 create the parent directory and
+#                    pre-touch the file with std::ofstream, so a URL could
+#                    not reach FFmpeg even if one were passed.
+#                    The bundled ffmpeg.exe that nelux's tests shell out to
+#                    additionally needs `pipe` (tests/test_batch_color_matrix
+#                    .py:46 "pipe:1"; tests/test_set_range_identity.py:62 and
+#                    tests/test_set_ranges_segments.py:65 "pipe:0").
+#   CLI FEATURES used by nelux's own tests through the bundled ffmpeg:
+#                    the `lavfi` INDEV (`-f lavfi`) with the testsrc /
+#                    testsrc2 / mandelbrot sources, and the scale, zscale,
+#                    format, null, psnr, ssim and libvmaf filters
+#                    (tests/test_codec_container_parity.py:40-41,
+#                    tests/test_software_encoders.py:181,
+#                    tests/benchmark_quality.py:26-28). `lavfi` is an indev,
+#                    so it needs --enable-avdevice -- which is why avdevice
+#                    is not merely a union courtesy.
+#   MUXERS/DEMUXERS beyond the five nelux writes, exercised through the CLI
+#                    and through tests/data/metadata_corpus: nut,
+#                    yuv4mpegpipe (.y4m), mpegts (.ts), mxf, ogg, flv, asf,
+#                    wav, image2. All default-on; listed so verify-output.sh
+#                    can assert them.
+#   AUDIO/SUBTITLE decoders needed by the corpus: aac, mp3, flac, opus,
+#                    vorbis, subrip, movtext, ass.
+#   Nelux/README.md:237 promises "anything libavcodec can decode", and :243
+#   "anything libavformat can demux" -- which is why no decoder or demuxer is
+#   ever disabled in this file.
+#
+# --- TAS ------------------------------------------------------------------
+#   ENCODERS -- all 15 `-c:v` values emitted by matchEncoder()
+#             (Theanimescripter/src/io/encodingSettings.py:10-307):
+#                    libx264 libx265 h264_nvenc hevc_nvenc av1_nvenc h264_qsv
+#                    hevc_qsv vp9_qsv libsvtav1 h264_amf hevc_amf prores_ks
+#                    gif libvpx-vp9 png
+#             plus  aac, libopus              (ffmpegSettings.py:846-858)
+#                   mov_text, webvtt          (ffmpegSettings.py:848-860)
+#                   mjpeg                     (TAS-Standalone probe.ts:209,
+#                                              TAS-AdobeEdition
+#                                              autoCutReviewOrchestrator.ts:344,
+#                                              MediaBrowserTab.tsx:794)
+#                   rawvideo                  (the `-f null -` sink)
+#   MUXERS   mp4 (incl. fragmented -movflags frag_keyframe+empty_moov+
+#            default_base_moof and +faststart), mov, matroska, webm, avi, gif,
+#            image2 (PNG sequences, ffmpegSettings.py:492-502), mjpeg, null,
+#            ipod (.m4a audio-only), plus flv, mpegts, ogg from
+#            TAS-AdobeEdition's container map (ffmpegBridge.ts:259-272)
+#   DEMUXERS rawvideo (ffmpegSettings.py:627-636, :681-699 -- the ONLY
+#            explicit -f on an input), image2, mov/mp4, matroska/webm,
+#            avi, gif, mjpeg, image_png_pipe, flv, mpegts, ogg,
+#            plus hls (see PROTOCOLS)
+#   FILTERS  scale (with flags=bilinear, flags=lanczos, in_range/out_range/
+#            out_color_matrix, and expression eval -- probe.ts:213 uses
+#            scale='min(1280,iw)':-2), format (gray, gray16be, yuva420p,
+#            yuv444p16le, nv12, p010le), setparams, zscale, hwupload_cuda,
+#            null, anull
+#   PROTOCOLS file, pipe (pipe:0 / pipe:1 / `-`), and -- reachable, not
+#            hypothetical -- https + tls + crypto + the hls demuxer.
+#            Theanimescripter/src/ytdlp.py:184 and :202 set
+#                "ffmpeg_location": os.path.dirname(FFMPEGPATH)
+#            which points yt-dlp at OUR ffmpeg. TAS sets neither
+#            --downloader nor hls_prefer_native (0 hits in all three repos),
+#            so yt-dlp's own defaults apply: it falls back to FFmpegFD --
+#            spawning our ffmpeg with an https://...m3u8 URL -- for live and
+#            live-from-start YouTube formats, which processUrlInput
+#            (src/io/inputNormalization.py:19-22) happily accepts.
+#            This is what makes a TLS backend a requirement rather than a
+#            courtesy; see flags/ffmpeg.linux.flags.
+#   BSFs     none named explicitly; aac_adtstoasc and h264_mp4toannexb are
+#            auto-inserted by the `-c copy` remux paths in TAS-AdobeEdition
+#            (ffmpegBridge.ts:361-421) and by yt-dlp's merge step
+#            (Theanimescripter/src/ytdlp.py:184-206)
+#
+# NOT needed by any consumer, and NOT enabled anywhere -- each would add
+# another pinned dependency and they are collectively most of the difference
+# between our avcodec and BtbN's 98.9 MB one: libass / libfreetype /
+# libfontconfig / libharfbuzz (no subtitles= / ass / drawtext filter anywhere
+# in any of the three repos), libbluray, libsrt, librist, libzmq,
+# libmp3lame, libtwolame, libtheora, libvorbis, libspeex, libgsm, libilbc,
+# libsoxr, libssh, libopenmpt, libmodplug, libgme, libshine, libsnappy,
+# libxml2, libplacebo, vulkan, chromaprint, frei0r, libvidstab,
+# librubberband, avisynth, libjxl, libwebp, libopenjpeg, librav1e, libxvid.
+#
+# librav1e / libxvid / libtheora / libwebp / libjxl / libopenjpeg deserve a
+# note because they DO appear in Nelux/tests/output/gray_all_codecs.py:44-65
+# and :116-122. That script is not a requirement list: its docstring (:1-8)
+# says "For each encoder that FFmpeg reports", and EXT_BY_NAME is a
+# container-preference lookup table for encoders that may or may not exist.
+# Checked before excluding them.
+
+# ===========================================================================
+# 6. External libraries
+# ===========================================================================
+--enable-libx264                              # both -- nelux tests (82 refs); TAS 12 presets
+--enable-libx265                              # both -- nelux tests (30 refs); TAS presets x265*
+--enable-libsvtav1                            # both -- nelux special-cases it at Encoder.cpp:1193,:1276,:1497; TAS av1/slow_av1
+--enable-libdav1d                             # nelux -- FIRST in the AV1 decoder chain, Decoder.cpp:151
+--enable-libaom                                # both -- SECOND in nelux's AV1 chain; also the libaom-av1 encoder
+--enable-libvpx                               # both -- TAS `-c:v libvpx-vp9` (encodingSettings.py:268); nelux tests libvpx-vp9
+--enable-libopus                              # both -- TAS muxes Opus into .webm (ffmpegSettings.py:848); nelux audio transcode target
+# libzimg backs the `zscale` filter. Theanimescripter/src/io/ffmpegSettings.py
+# :797 emits `zscale=matrix=bt2020:norm=bt2020:dither=error_diffusion` for the
+# BT.2020 path. Without libzimg that filter does not exist and every BT.2020
+# render fails. (The BT.709 path was deliberately moved off zscale onto
+# swscale for ~3x CPU -- see the comment at ffmpegSettings.py:776-790 -- but
+# the BT.2020 path is still reachable.)
+--enable-libzimg                              # TAS
+
+# libopenh264 -- the LAST-RESORT H.264 encoder in nelux's default-encoder
+# probe. nelux no longer hardcodes "h264_mf"; VideoEncoder.cpp:38-88 probes,
+# in order:
+#     Windows  h264_mf -> libx264 -> libopenh264       (:45-46)
+#     macOS    libx264 -> h264_videotoolbox -> libopenh264  (:48-49)
+#     Linux    libx264 -> libopenh264                  (:51)
+# and throws at :83-87 naming all candidates if none exists. libx264 is
+# always present here so the probe never actually reaches the last entry --
+# but the probe is the ONLY place nelux degrades gracefully instead of
+# throwing, and shipping the encoder it names costs ~1 MB. BSD-2-Clause, so
+# no licence interaction with --enable-gpl.
+# NOTE: we build OpenH264 from source, so Cisco's H.264 royalty coverage --
+# which applies only to Cisco's own prebuilt binaries -- does NOT apply.
+# That is the same patent position we already have from libx264/libx265.
+--enable-libopenh264                          # nelux
+
+# libvmaf backs the `libvmaf` FILTER, and this is a hard test requirement,
+# not a nice-to-have. Nelux/tests/test_software_encoders.py is a real pytest
+# module (parametrised test_software_encoder_pixfmt at :226) whose quality
+# gate at :181 runs
+#     [0:v][1:v]libvmaf=feature='name=psnr|name=float_ssim'
+# through the bundled ffmpeg and RAISES RuntimeError at :198 when that fails.
+# It skips only when ffmpeg/ffprobe are absent (:171, :221) -- a missing
+# libvmaf filter is a test FAILURE, not a skip. Seven more benchmark scripts
+# use it (bench_encode_quality.py:143, bench_full_matrix.py:229,
+# bench_scaler_matrix.py:181, comprehensive_bench.py:294,
+# pixfmt_matrix_bench.py:243, bench_workflow.py:217).
+# BSD-2-Clause-Patent; models are compiled in (no runtime .json files).
+# `float_ssim` needs libvmaf's float feature extractors -- build-deps.sh
+# passes -Denable_float=true explicitly rather than relying on the default.
+--enable-libvmaf                              # nelux
+
+# MP3 ENCODING: deliberately NOT provided, and this is now a decision rather
+# than a gap. Both claims were checked against the consumers' source:
+#   * nelux -- AV_CODEC_ID_MP3 at Encoder.cpp:399 is the 4th entry of a
+#     PROBE list (Encoder.cpp:398-400) inside setupAudioTranscode. Every
+#     candidate is gated on `avformat_query_codec(...) && avcodec_find_
+#     encoder(c)` at :404-405, native AV_CODEC_ID_AAC is first, and the whole
+#     list is only consulted when av_guess_codec() came back empty
+#     (Encoder.cpp:396). For the five containers inferContainerFormat() can
+#     produce (Encoder.cpp:1509-1524) av_guess_codec never comes back empty,
+#     and AAC/Opus/Vorbis encoders are all present regardless. The MP3 entry
+#     degrades cleanly when no MP3 encoder exists.
+#   * TAS -- zero references to mp3/libmp3lame/wav/flac/m4a anywhere under
+#     Theanimescripter/src. The only `-c:a` line in the whole repo is
+#     ffmpegSettings.py:860, fed by :846-859 with exactly
+#     {copy, libopus, aac}.
+# MP3 *decoding* works (native decoder, always on) -- which is what the
+# metadata corpus (Nelux/tests/data/metadata_corpus/D/*mp3*.mp4) exercises.
+# If a --custom_encoder user ever needs `-c:a libmp3lame`, pin LAME 3.100
+# (SHA256 ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e,
+# verified 2026-08-04) and add one line here.

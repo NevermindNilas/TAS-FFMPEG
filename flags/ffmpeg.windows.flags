@@ -1,0 +1,98 @@
+# ===========================================================================
+# flags/ffmpeg.windows.flags -- Windows x64, MSYS2 / mingw64.
+#
+# FFmpeg CANNOT be built with MSVC (it needs C11 + GNU inline asm + a POSIX
+# shell + nasm). It is built with mingw-w64 gcc under MSYS2. The output is
+# still fully consumable from MSVC -- see README.md#msvc-import-libraries.
+# ===========================================================================
+
+# MANDATORY. --disable-autodetect (ffmpeg.flags) turns off THREADS_LIST, and
+# w32threads is in THREADS_LIST. Without this line the build is
+# SINGLE-THREADED and every decode/encode benchmark silently collapses.
+# w32threads rather than pthreads so the DLLs do not import
+# libwinpthread-1.dll, which nelux's wheel would then also have to ship.
+--enable-w32threads                           # both
+
+# ===========================================================================
+# NVIDIA -- NVENC / NVDEC / CUVID
+# ===========================================================================
+# ffnvcodec is the stub-header package pinned as NVCODEC_TAG in versions.lock.
+# It dlopen's nvcuda.dll + nvEncodeAPI64.dll at runtime, so there is NO
+# build-time or ship-time dependency on the CUDA toolkit or on any NVIDIA DLL.
+# The chosen headers set the minimum driver version for BOTH consumers --
+# see README.md#nvidia-driver-floor.
+--enable-ffnvcodec                            # both
+--enable-cuda                                 # both -- hwcontext_cuda; TAS uses `-init_hw_device cuda=cu:0` (ffmpegSettings.py:677), nelux uses av_hwdevice_ctx_create(AV_HWDEVICE_TYPE_CUDA) (cuda/Decoder.cpp:453, Encoder.cpp:876)
+--enable-nvenc                                # both -- h264_nvenc/hevc_nvenc/av1_nvenc
+--enable-nvdec                                # nelux -- AV_PIX_FMT_CUDA hwaccel path, cuda/Decoder.cpp:469-476
+--enable-cuvid                                # nelux -- the nine *_cuvid decoders, cuda/Decoder.cpp:509-533
+
+# We deliberately do NOT enable --enable-cuda-nvcc / --enable-cuda-llvm.
+# Those are needed only to compile the CUDA *filters* (scale_cuda,
+# overlay_cuda, ...). Neither consumer uses one: TAS uses hwupload_cuda, and
+# ffmpeg-8.1.2/configure:3518 shows hwupload_cuda_filter_deps="ffnvcodec"
+# only. Skipping nvcc removes the entire CUDA toolkit from the build
+# environment -- a large reproducibility and CI-time win.
+# If a --custom_encoder user ever needs scale_cuda, that is the flag to add,
+# and it pulls the CUDA toolkit into the build image with it.
+
+# ===========================================================================
+# Intel QSV
+# ===========================================================================
+# TAS emits `-c:v h264_qsv`, `hevc_qsv` and `vp9_qsv`
+# (encodingSettings.py:172-192, :270-271); nelux's tests exercise h264_qsv
+# and hevc_qsv.
+#
+# configure:7291-7292 -- libmfx and libvpl are MUTUALLY EXCLUSIVE and
+# configure dies if both are given. configure:7309-7317 does
+#     check_pkg_config libmfx "vpl >= 2.6" ... || die "ERROR: libvpl >= 2.6 not found"
+# with NO non-pkg-config fallback, so PKG_CONFIG_PATH must include the
+# installed vpl.pc even on Windows. scripts/build-ffmpeg.sh sets it.
+#
+# Note that configure's libvpl branch *enables the internal `libmfx` config
+# symbol* (the first argument to check_pkg_config is the name it enables), so
+# vp9_qsv_encoder_deps="libmfx MFX_CODEC_VP9" (configure:3672) is satisfied by
+# libvpl -- that is what makes TAS's `qsv_vp9` preset buildable.
+--enable-libvpl                               # both
+
+# ===========================================================================
+# AMD AMF
+# ===========================================================================
+# TAS emits `-c:v h264_amf` / `hevc_amf` (encodingSettings.py:241-263).
+# Header-only SDK; the runtime is amfrt64.dll shipped with the AMD driver.
+--enable-amf                                  # TAS
+
+# ===========================================================================
+# Microsoft Media Foundation
+# ===========================================================================
+# NOT optional. h264_mf is the FIRST candidate in nelux's Windows
+# default-encoder probe (Nelux/src/Nelux/python/VideoEncoder.cpp:45, chain
+# h264_mf -> libx264 -> libopenh264). Without it the probe silently falls
+# through to libx264, which is a behaviour change on Windows rather than a
+# failure -- exactly the kind of silent difference this repo exists to stop.
+# mediafoundation is in EXTERNAL_AUTODETECT_LIBRARY_LIST, so
+# --disable-autodetect would drop it silently; naming it here makes configure
+# hard-fail instead if the mingw mfplat headers are missing, and
+# verify-output.sh additionally asserts h264_mf/hevc_mf in the built binary.
+--enable-mediafoundation                      # nelux
+
+# ===========================================================================
+# Windows hardware decode
+# ===========================================================================
+# Neither consumer passes -hwaccel today (nelux plumbs only
+# AV_HWDEVICE_TYPE_CUDA; TAS passes no -hwaccel at all), but --custom_encoder
+# can, and these cost well under 1 MB combined.
+--enable-d3d11va                              # union
+--enable-d3d12va                              # union
+--enable-dxva2                                # union
+
+# ===========================================================================
+# TLS
+# ===========================================================================
+# Schannel -- the OS implementation. Zero extra dependencies, and it sidesteps
+# the GPLv2 problem entirely: configure:7493 makes OpenSSL >= 3.0 require
+# --enable-version3, which we refuse (see ffmpeg.flags).
+# Needed because yt-dlp delegates some fragmented (HLS/DASH) downloads to
+# ffmpeg (Theanimescripter/src/ytdlp.py:184,202) and TAS-AdobeEdition streams
+# fragmented MP4 over HTTP (MediaBrowserTab.tsx:486-498).
+--enable-schannel                             # TAS

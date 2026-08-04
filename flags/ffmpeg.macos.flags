@@ -1,0 +1,49 @@
+# ===========================================================================
+# flags/ffmpeg.macos.flags -- macOS arm64 AND x86_64.
+#
+# TWO SEPARATE NATIVE BUILDS -- no lipo, no universal2. nelux's macOS wheels
+# are per-arch, and TAS resolves a per-arch Homebrew ffmpeg today. The
+# architecture is selected by scripts/build-ffmpeg.sh via --arch/-arch, not
+# here, because it is a machine fact rather than a design decision.
+# ===========================================================================
+
+# MANDATORY -- --disable-autodetect (ffmpeg.flags) turns off THREADS_LIST.
+--enable-pthreads                             # both
+
+# VideoToolbox: the only hardware codec path that exists on macOS. Gives the
+# h264/hevc/prores_videotoolbox encoders and the matching hwaccel decoders,
+# from a system framework -- no extra ship weight, no extra pinned dependency.
+#
+# NO LONGER merely a union courtesy: h264_videotoolbox is the SECOND candidate
+# in nelux's macOS default-encoder probe (Nelux/src/Nelux/python/
+# VideoEncoder.cpp:48, chain libx264 -> h264_videotoolbox -> libopenh264), so
+# it is named by nelux's own code. hevc_videotoolbox and prores_videotoolbox
+# come along free and are reachable from --custom_encoder. TAS's matchEncoder()
+# still has no VideoToolbox preset.
+--enable-videotoolbox                         # nelux
+--enable-audiotoolbox                         # union -- aac_at / alac_at, system framework
+
+# TLS via SecureTransport -- the system implementation. Same GPLv2 reasoning
+# as Schannel on Windows: it avoids OpenSSL >= 3.0, which configure:7493
+# forbids without --enable-version3.
+# NOTE: SecureTransport is deprecated by Apple. It still builds in 8.1.2; if
+# it is ever removed the replacement is the same one Linux needs -- pin
+# LibreSSL and use --enable-libtls.
+--enable-securetransport                      # TAS
+
+# --- Not available on macOS ------------------------------------------------
+# NVENC/NVDEC/CUVID: no macOS CUDA driver past 10.13. Not enabled.
+# QSV (libvpl):      no oneVPL runtime for macOS. Not enabled.
+# AMF:               no macOS runtime. Not enabled.
+# MediaFoundation:   Windows-only.
+#
+# RESOLVED (was ">>> CONSUMER ISSUE <<<"): nelux no longer hardcodes
+# "h264_mf" as its default encoder. VideoEncoder.cpp:38-88 is a runtime PROBE:
+#     Windows  h264_mf -> libx264 -> libopenh264
+#     macOS    libx264 -> h264_videotoolbox -> libopenh264
+#     Linux    libx264 -> libopenh264
+# throwing at :83-87 and naming every candidate if none resolves. All three
+# macOS candidates exist in this build -- libx264 and libopenh264 from
+# flags/ffmpeg.flags, h264_videotoolbox from --enable-videotoolbox above --
+# and scripts/verify-output.sh asserts all three against the built binary via
+# flags/required-components.txt. The macOS default is therefore libx264.

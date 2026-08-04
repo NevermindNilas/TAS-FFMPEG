@@ -1,0 +1,59 @@
+# ===========================================================================
+# flags/ffmpeg.linux.arm64.flags -- Linux aarch64 DELTA over ffmpeg.linux.flags.
+#
+# WHY THIS TARGET EXISTS AT ALL
+#   D:\Nelux\tools\ffmpeg.lock:113-119 defines LINUXARM64_BTBN_* and
+#   Nelux/tools/download_ffmpeg.sh consumes it, so nelux ships Linux/aarch64
+#   today. Without this file that is the one platform where the "both
+#   consumers run the same build" guarantee does not hold, and nelux has to
+#   keep a BtbN fallback that WILL 404 when BtbN prunes the autobuild tag.
+#
+# HOW IT LOADS
+#   scripts/lib/flags.sh concatenates ffmpeg.flags, then ffmpeg.linux.flags,
+#   then this file. FFmpeg's configure is LAST-WINS, so the three disables
+#   below override the enables in ffmpeg.linux.flags rather than duplicating
+#   the whole file. Read this as "linux, minus the x86-only vendor SDKs".
+#
+# BUILD ENVIRONMENT
+#   quay.io/pypa/manylinux_2_28_aarch64 (MANYLINUX_IMAGE_AARCH64 in
+#   versions.lock) -- AlmaLinux 8 aarch64, glibc 2.28, devtoolset gcc. Same
+#   reasoning as x86_64: nelux publishes manylinux_2_28 wheels and auditwheel
+#   rejects anything referencing a newer glibc.
+#   nasm/yasm are NOT installed for this arch and are not needed -- x264,
+#   x265, dav1d, libaom, SVT-AV1 and libvpx all use .S/gas assembly on
+#   aarch64, never nasm. docker/Dockerfile.manylinux_2_28 makes that
+#   conditional on TARGETARCH.
+# ===========================================================================
+
+# --- Intel QSV: does not exist on aarch64 ----------------------------------
+# There is no Intel GPU behind an aarch64 CPU in any shipping configuration,
+# and the oneVPL dispatcher has no aarch64 runtime. libvpl would also be a
+# hard configure failure here: configure:7309-7317 does
+#     check_pkg_config libmfx "vpl >= 2.6" ... || die "ERROR: libvpl >= 2.6 not found"
+# with no fallback, so leaving it on would abort the build, not degrade it.
+--disable-libvpl                              # both -- no aarch64 QSV runtime
+
+# VAAPI is enabled on linux/x86_64 for exactly one reason: the QSV hwcontext
+# creates a VAAPI child device. With QSV gone the reason is gone, and turning
+# it off keeps libva-devel out of the aarch64 image and libva.so.2 out of the
+# shipped dependency closure. Neither consumer ever creates
+# AV_HWDEVICE_TYPE_VAAPI (0 hits in Nelux/src; TAS passes no -hwaccel).
+--disable-vaapi                               # both -- only ever present for QSV
+
+# --- AMD AMF: no aarch64 runtime -------------------------------------------
+# amdgpu-pro / the Mesa AMF bridge are x86_64-only. TAS's h264_amf/hevc_amf
+# presets (encodingSettings.py:241-263) simply cannot run on this platform;
+# building the encoders would advertise something that always fails at
+# runtime with "Cannot load AMF runtime".
+--disable-amf                                 # TAS -- no aarch64 AMF runtime
+
+# --- DELIBERATELY KEPT ON ---------------------------------------------------
+# ffnvcodec / cuda / nvenc / nvdec / cuvid stay enabled. NVIDIA does ship
+# aarch64 Linux drivers (Jetson, Grace-Hopper, ARM servers) and the
+# nv-codec-headers are pure stub headers that dlopen libnvcuda.so /
+# libnvidia-encode.so at runtime -- there is no aarch64-specific build
+# requirement and no cost when the driver is absent.
+# gnutls likewise stays on: the yt-dlp FFmpegFD exposure documented in
+# flags/ffmpeg.linux.flags is arch-independent.
+# libvmaf, libopenh264, libzimg, x264, x265, dav1d, SVT-AV1, libaom, libvpx,
+# opus and zlib all build on aarch64 and all stay.

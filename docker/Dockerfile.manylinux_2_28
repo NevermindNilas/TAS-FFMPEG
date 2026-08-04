@@ -1,0 +1,132 @@
+# ===========================================================================
+# docker/Dockerfile.manylinux_2_28
+#
+# The Linux build environment, for BOTH x86_64 and aarch64. NOT Ubuntu, and
+# this is load-bearing.
+#
+# nelux publishes manylinux_2_28 wheels. `auditwheel repair` inspects every
+# shared object that ends up inside the wheel and REJECTS the wheel if any
+# symbol is versioned against a glibc newer than 2.28. FFmpeg built on
+# ubuntu-latest produces libavutil.so.60 with GLIBC_2.34 references, which
+# fails the repair step for the ENTIRE wheel -- not just for FFmpeg.
+#
+# manylinux_2_28_{x86_64,aarch64} is AlmaLinux 8 (glibc 2.28) with a modern
+# GCC toolchain from devtoolset, which is exactly what we need: new compiler,
+# old libc.
+#
+# scripts/verify-output.sh asserts the glibc floor after every build, so if
+# someone runs the Linux build outside this image it fails loudly rather than
+# producing a wheel-breaking artefact.
+#
+# BUILD (x86_64):
+#   docker build -f docker/Dockerfile.manylinux_2_28 \
+#     --build-arg MANYLINUX_IMAGE="$(sed -n 's/^MANYLINUX_IMAGE_X86_64=//p' versions.lock)" \
+#     -t tas-ffmpeg-linux .
+#
+# BUILD (aarch64 -- on an aarch64 host, or with binfmt/QEMU registered):
+#   docker build -f docker/Dockerfile.manylinux_2_28 --platform linux/arm64 \
+#     --build-arg MANYLINUX_IMAGE="$(sed -n 's/^MANYLINUX_IMAGE_AARCH64=//p' versions.lock)" \
+#     -t tas-ffmpeg-linuxarm64 .
+#
+# RUN (either):
+#   docker run --rm -v "$PWD:/work" -w /work tas-ffmpeg-linux ./scripts/build.sh
+#
+# The image tag comes from versions.lock, so nothing here hardcodes a version;
+# the ARG default exists only so a bare `docker build` still works. versions
+# .lock also records the digest each dated tag resolved to -- switch the FROM
+# to image@digest if you want byte-level reproducibility, accepting that
+# quay.io eventually garbage-collects old untagged manifests.
+# ===========================================================================
+
+ARG MANYLINUX_IMAGE=quay.io/pypa/manylinux_2_28_x86_64:2026.08.02-2
+FROM ${MANYLINUX_IMAGE}
+
+# Set automatically by BuildKit ("amd64" / "arm64"); used only to decide
+# whether nasm/yasm/libva are worth installing.
+ARG TARGETARCH
+
+# --- extra repositories ----------------------------------------------------
+# *** nasm AND libva-devel ARE NOT IN AppStream ON EL8. ***
+# Both live in the PowerTools repository (renamed CRB in EL9+), which is
+# present but DISABLED by default in AlmaLinux 8. Without enabling it, the
+# install below dies with
+#     Error: Unable to find a match: nasm
+# and the IMAGE BUILD fails -- before a single line of FFmpeg is compiled, on
+# the very first CI run, for a reason that reads like a typo.
+#
+# The repo id differs across the EL8/EL9 lineage and across rebuilds
+# (powertools / PowerTools / crb), so all three are tried. It is NOT fatal if
+# none can be enabled: on aarch64 nothing from that repo is installed anyway,
+# and on x86_64 the `dnf install nasm` below is the loud, specific failure we
+# want rather than a generic one here.
+RUN dnf -y install dnf-plugins-core epel-release \
+ && { dnf config-manager --set-enabled powertools \
+      || dnf config-manager --set-enabled crb \
+      || dnf config-manager --set-enabled PowerTools \
+      || echo "WARNING: could not enable PowerTools/CRB; nasm and libva-devel may be unavailable"; }
+
+# --- toolchain -------------------------------------------------------------
+# cmake/ninja : x265, libaom, SVT-AV1, opus, libvpl
+# meson/ninja : dav1d, libvmaf, openh264
+# autotools   : zimg, x264, libvpx, and the gmp/nettle/gnutls TLS stack
+# pkgconf     : *** REQUIRED, NOT OPTIONAL. *** Every external-library check
+#               in ffmpeg-8.1.2/configure that we enable is require_pkg_config
+#               (libx264 :7426, libx265 :7432, libopenh264 :7343, libvmaf
+#               :7391, libzimg :7441, dav1d :7251, SvtAv1Enc :7377, aom :7235,
+#               vpx :7402, opus :7352, libvpl :7309) and require_* DIES on
+#               failure. With no pkg-config binary on PATH, EVERY one of them
+#               fails and configure aborts on the first. The manylinux base
+#               image is not guaranteed to carry it, and `dnf install` of a
+#               package that is already present is a no-op, so it is named
+#               here unconditionally.
+# nasm/yasm   : x86-64 assembly for x264/x265/aom/svt-av1/dav1d/libvpx/vmaf.
+#               NOT needed on aarch64 -- every one of those projects uses .S
+#               gas assembly there, and nasm is an x86 assembler.
+#               PowerTools/CRB repo -- see above.
+# libva-devel : REQUIRED for --enable-vaapi, which QSV needs on Linux because
+#               the QSV hwcontext creates a VAAPI child device at runtime.
+#               x86_64 ONLY -- flags/ffmpeg.linux.arm64.flags passes
+#               --disable-libvpl and --disable-vaapi, so aarch64 needs neither
+#               and installing it would only add an unused .so to the image.
+#               PowerTools/CRB repo -- see above.
+#
+# DELIBERATELY ABSENT: bzip2-devel and xz-devel. They used to be installed
+# here, and on AlmaLinux 8 they provide only the SHARED libbz2.so / liblzma.so
+# -- so --enable-bzlib and --enable-lzma linked them dynamically and
+# libavformat.so.62 acquired DT_NEEDED libbz2.so.1 and liblzma.so.5. Both are
+# outside the manylinux_2_28 policy set, so `auditwheel repair` would pull
+# them into (or reject) nelux's wheel. Both are now built STATIC from pinned
+# source by scripts/build-deps.sh (versions.lock BZIP2_*/XZ_*), and leaving
+# the -devel packages out of the image guarantees a regression cannot silently
+# resolve against the system copy instead. The `xz` COMMAND stays: tar needs
+# it to unpack the .tar.xz sources.
+RUN dnf -y install \
+      cmake ninja-build \
+      pkgconf pkgconf-pkg-config \
+      git curl xz zip \
+      libtool autoconf automake \
+      diffutils file which \
+ && if [ "${TARGETARCH}" = "arm64" ]; then \
+      echo "aarch64: skipping nasm/yasm (gas .S assembly) and libva-devel (no QSV on this arch)" ; \
+    else \
+      dnf -y install nasm yasm libva-devel ; \
+    fi \
+ && dnf clean all \
+ && command -v pkg-config >/dev/null 2>&1 \
+    || { echo "FATAL: no pkg-config on PATH; every require_pkg_config in FFmpeg's configure would die" ; exit 1 ; }
+
+# manylinux images ship several CPythons; use one to get meson+ninja at a
+# pinned-enough version. meson is a build tool, not a shipped dependency, so a
+# range is acceptable here where it would not be for a library.
+RUN /opt/python/cp312-cp312/bin/pip install --no-cache-dir "meson>=1.4,<2" "ninja>=1.11" \
+ && ln -sf /opt/python/cp312-cp312/bin/meson /usr/local/bin/meson \
+ && ln -sf /opt/python/cp312-cp312/bin/ninja /usr/local/bin/ninja
+
+# devtoolset gcc is already on PATH in manylinux_2_28; make it explicit so a
+# base-image change cannot silently fall back to the system gcc 8.
+ENV CC=gcc CXX=g++
+
+# The build scripts are bash and assume a POSIX environment.
+SHELL ["/bin/bash", "-c"]
+
+WORKDIR /work
