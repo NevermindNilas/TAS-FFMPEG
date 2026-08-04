@@ -24,6 +24,14 @@ on:
 permissions:
   contents: write
 
+# A full run is five parallel ~40-minute builds. If a branch is pushed again
+# while one is in flight, the older run is now worthless — cancel it rather
+# than paying for both. Tag pushes are NOT cancelled: those publish a release,
+# and a half-cancelled release is worse than a redundant one.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   # -------------------------------------------------------------------------
   # Cheap gate: validate every flag name and component name against the pinned
