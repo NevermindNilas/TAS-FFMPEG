@@ -121,11 +121,17 @@ the shipped licences/ directory silently kept ignoring them." ;;
 
 # dep_tarball PREFIX -- basename of <PREFIX>_URL, i.e. the file fetch-sources
 # .sh leaves in $SRC_DIR for a tarball-distributed component.
+#
+# <PREFIX>_URL may be a '|'-separated mirror list (see fetch_tarball), so take
+# the FIRST entry rather than basename'ing the whole string. Doing the latter
+# happens to work while every mirror ends in the same filename, and silently
+# returns the wrong name the moment one does not -- e.g. a mirror serving
+# `download?file=gmp-6.3.0.tar.xz`.
 dep_tarball() {
   local u
   eval "u=\${$1_URL:-}"
   [ -n "$u" ] || die "dep_tarball: ${1}_URL is not set in versions.lock"
-  basename "$u"
+  basename "${u%%|*}"
 }
 
 # --- platform detection ----------------------------------------------------
@@ -159,9 +165,22 @@ sha256_of() {
   fi
 }
 
-# fetch_tarball URL DEST EXPECTED_SHA256
+# fetch_tarball URL[|URL...] DEST EXPECTED_SHA256
+#
+# URL may be a '|'-separated list of mirrors, tried left to right until one
+# yields bytes. The FIRST url should be the most reliable host, not
+# necessarily the upstream one.
+#
+# Mirrors are safe here precisely because every artefact is pinned by SHA256:
+# a hostile or stale mirror cannot substitute content without failing the
+# check below, so the only thing a mirror can do is fail. The alternative --
+# a single canonical host -- means one unreachable server stops every build
+# on every platform, which is exactly what happened on the first full CI run:
+#     curl: (28) Failed to connect to gmplib.org:443 after 21200 ms
+# took out Windows, macOS arm64 and macOS x86_64 simultaneously, four retries
+# each, while ftp.gnu.org was serving a byte-identical tarball the whole time.
 fetch_tarball() {
-  local url="$1" dest="$2" want="$3" got
+  local urls="$1" dest="$2" want="$3" got url ok=0
   mkdir -p "$(dirname "$dest")"
   if [ -f "$dest" ]; then
     got="$(sha256_of "$dest")"
@@ -169,8 +188,25 @@ fetch_tarball() {
     warn "cached $(basename "$dest") has wrong SHA256, refetching"
     rm -f "$dest"
   fi
-  log "fetching $url"
-  curl -fsSL --retry 3 --retry-delay 5 -o "$dest" "$url"
+  local IFS='|'
+  # shellcheck disable=SC2206  # deliberate split on '|'
+  local mirror_list=($urls)
+  unset IFS
+  for url in "${mirror_list[@]}"; do
+    [ -n "$url" ] || continue
+    log "fetching $url"
+    # --max-time bounds a black-holed host. gmplib.org burned 75s per attempt
+    # on the macOS runners before curl gave up on its own.
+    if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 20 --max-time 600 \
+            -o "$dest" "$url"; then
+      ok=1
+      break
+    fi
+    warn "mirror failed: $url"
+    rm -f "$dest"
+  done
+  [ "$ok" -eq 1 ] || die "all mirrors failed for $(basename "$dest"):
+$(printf '  %s\n' "${mirror_list[@]}")"
   got="$(sha256_of "$dest")"
   [ "$got" = "$want" ] || die "SHA256 MISMATCH for $url
   expected $want
