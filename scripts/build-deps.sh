@@ -926,4 +926,46 @@ build_zimg
 build_vmaf
 build_gnutls
 
+# --- Windows: one pthread, not two -----------------------------------------
+# Round 7 built every dependency AND all of FFmpeg on Windows, then died
+# linking avcodec-62.dll with ~30 of these:
+#
+#   ld: libwinpthread.a(libwinpthread_la-mutex.o): multiple definition of
+#       `pthread_mutex_lock';
+#       libpthread.dll.a(libwinpthread_1_dll_d000088.o): first defined here
+#
+# Two copies of winpthread reach the link line. We deliberately put the STATIC
+# one there (build-ffmpeg.sh's -l:libwinpthread.a) so the shipped DLLs do not
+# import libwinpthread-1.dll -- verify-output.sh's import allowlist rejects it,
+# and neither consumer ships it. The second copy arrives as a plain -lpthread
+# inside a dependency's generated .pc, which GNU ld resolves to
+# libpthread.dll.a, the IMPORT LIBRARY for that same DLL.
+#
+# This sweeps every .pc rather than only the ones pc_fix_cxx touches, because
+# the offender is x264 -- a C project that never goes through pc_fix_cxx.
+# x264/configure:1728 writes $libpthread straight into its Libs:. Any other
+# dependency that does the same is covered for free.
+#
+# Deliberately NOT solved with -Wl,--allow-multiple-definition: that silences
+# the diagnostic and lets the linker pick whichever copy it saw first, which is
+# exactly the ambiguity we are trying to remove.
+if [ "$OS" = windows ]; then
+  _pc_pthread_fixed=0
+  for _pc in "$PREFIX_DIR"/lib/pkgconfig/*.pc; do
+    [ -f "$_pc" ] || continue
+    if grep -qE -- '(^|[[:space:]])-lpthread([[:space:]]|$)' "$_pc"; then
+      # NOTE the '#' delimiter: the pattern contains '|' for the alternation,
+      # so the usual 's|...|...|' spelling makes sed die with
+      #     unknown option to `s'
+      # The word-boundary groups matter -- a bare s/-lpthread/.../ would also
+      # rewrite -lpthreadxyz. Both cases are covered by a local test.
+      sed -i.bak -E 's#(^|[[:space:]])-lpthread([[:space:]]|$)#\1-l:libwinpthread.a\2#g' "$_pc"
+      rm -f "$_pc.bak"
+      log "  $(basename "$_pc"): -lpthread -> -l:libwinpthread.a"
+      _pc_pthread_fixed=$((_pc_pthread_fixed + 1))
+    fi
+  done
+  log "windows: normalised pthread in $_pc_pthread_fixed pkg-config file(s)"
+fi
+
 log "dependencies for $OS/$ARCH are in $PREFIX_DIR"
