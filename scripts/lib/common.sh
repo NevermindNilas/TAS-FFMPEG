@@ -28,7 +28,13 @@ die()  { printf '\033[1;31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 load_lock() {
   [ -f "$LOCK_FILE" ] || die "versions.lock not found at $LOCK_FILE"
   local bad
-  bad="$(grep -vE '^[[:space:]]*(#.*)?$|^[A-Z][A-Z0-9_]*=[A-Za-z0-9._:/@+-]*$' "$LOCK_FILE" || true)"
+  # The value charset is an allowlist, not a denylist: it is what makes
+  # `source`-ing this file safe. '|' is permitted because *_URL may hold a
+  # mirror list (see fetch_tarball); it carries no meaning to the shell inside
+  # the double-quoted expansions we use, and every other metacharacter --
+  # $ ` ; & ( ) < > ' " space -- stays excluded, so command substitution and
+  # command chaining remain impossible.
+  bad="$(grep -vE '^[[:space:]]*(#.*)?$|^[A-Z][A-Z0-9_]*=[A-Za-z0-9._:/@+|-]*$' "$LOCK_FILE" || true)"
   if [ -n "$bad" ]; then
     die "versions.lock contains lines that are not plain KEY=value:
 $bad"
