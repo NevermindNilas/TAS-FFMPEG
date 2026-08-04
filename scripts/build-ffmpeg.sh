@@ -107,6 +107,44 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     fi
     ;;
   linux)
+    # *** -lpthread IS MANDATORY HERE, AND x265 IS WHY. ***
+    #
+    # manylinux_2_28 is AlmaLinux 8 -- glibc 2.28, which still keeps
+    # pthread_create/pthread_join in libpthread.so.0. (glibc only folded them
+    # into libc.so.6 in 2.34, which is why this class of failure is invisible
+    # on every modern distro and on macOS, where pthreads live in libSystem.)
+    #
+    # configure gets each dependency's link line from pkg-config, and x265's
+    # CMake DELIBERATELY strips the C runtime names out of it:
+    #     x265/source/CMakeLists.txt:145    list(APPEND PLATFORM_LIBS pthread)
+    #     x265/source/CMakeLists.txt:1124-1126
+    #         list(REMOVE_ITEM PLIBLIST "-lc" "-lpthread" ...)
+    # so `pkg-config --static --libs x265` returns
+    #     -L... -lx265 -lstdc++ -lm -lgcc_s -lgcc -lrt -ldl
+    # with no -lpthread, while libx265.a really does reference pthread_create
+    # (x265/source/common/threading.cpp:147) and pthread_mutex_init
+    # (common/threading.h:319,349,437).
+    #
+    # configure does NOT make up the difference. Its own pthread probe at
+    # configure:7152-7155 ends in `add_allcflags -pthread`, and add_allcflags
+    # only touches CFLAGS/CXXFLAGS/OBJCFLAGS -- while test_ld links with
+    #     $ld $LDFLAGS $LDEXEFLAGS $flags -o $TMPE $TMPO $libs $extralibs
+    # (no CFLAGS). So the probe for libx265 at configure:7432 links without
+    # any pthread at all and dies with the least useful message in the file:
+    #     ERROR: x265 not found using pkg-config
+    # -- identical to the message you get when x265.pc is missing entirely,
+    # which is what sent the previous round chasing the wrong bug.
+    #
+    # --extra-libs lands in $extralibs, which IS on every probe link line, so
+    # this is the lever. It is also exactly what FFmpeg's own CentOS
+    # compilation guide prescribes (`--extra-libs="-lpthread -lm"`), for this
+    # reason. Every other C++ dependency we build keeps pthread in its .pc
+    # (x264/configure:1728, and meson emits it for openh264/libvmaf/dav1d),
+    # which is why x265 alone failed. libpthread.so.0 is inside the
+    # manylinux_2_28 policy set and is already allowed by
+    # scripts/verify-output.sh's DT_NEEDED allowlist, so this adds no new
+    # runtime dependency -- avutil already pulls it in via pthreads_extralibs.
+    TOOLCHAIN+=("--extra-libs=-lpthread")
     # Built inside manylinux_2_28 -- see docker/Dockerfile.manylinux_2_28.
     # $ORIGIN so ffmpeg/ffprobe find ../lib without LD_LIBRARY_PATH.
     #
@@ -138,6 +176,34 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     TOOLCHAIN+=("--extra-ldflags=-Wl,-rpath,'\$\$ORIGIN:\$\$ORIGIN/../lib'")
     ;;
   macos)
+    # *** SAME --disable-autodetect ICONV TRAP AS WINDOWS ABOVE. ***
+    # macOS does NOT provide iconv in libc: the entry points live in
+    # /usr/lib/libiconv.2.dylib and you must say -liconv. configure's normal
+    # autodetect path copes --
+    #     configure:7840-7841  elif enabled iconv; then
+    #                              check_func_headers iconv.h iconv ||
+    #                              check_lib iconv iconv.h iconv -liconv
+    # -- because check_lib sets iconv_extralibs, which configure:4310 folds
+    # into avcodec_extralibs. But we pass --disable-autodetect, and
+    # configure:4727-4731 then forces
+    #     disabled iconv || enable libc_iconv
+    # which takes the OTHER branch at :7838-7839, and that branch never names
+    # a library at all: it only probes, and it ignores its own result. So
+    # CONFIG_ICONV stays 1, nothing adds -liconv, and the build gets all the
+    # way to the link before dying:
+    #     Undefined symbols for architecture x86_64:
+    #       "_iconv", referenced from: _avcodec_decode_subtitle2 in decode.o
+    #       "_iconv_close", ...  "_iconv_open", ...
+    #     ld: symbol(s) not found for architecture x86_64
+    #     make: *** [libavcodec/libavcodec.62.dylib] Error 1
+    # (macos-x86_64 in round 6 -- macos-arm64 had died at lzma before
+    # reaching the link, but it takes exactly the same path.)
+    #
+    # test_ld appends $extralibs to every probe link line, so --extra-libs is
+    # the lever here too, exactly as on Windows. Unlike Windows this needs no
+    # libiconv of our own: /usr/lib/libiconv.2.dylib is a system library and
+    # scripts/verify-output.sh's macOS allowlist already permits /usr/lib.
+    TOOLCHAIN+=("--extra-libs=-liconv")
     TOOLCHAIN+=("--arch=$ARCH")
     TOOLCHAIN+=("--extra-cflags=-arch $ARCH")
     TOOLCHAIN+=("--extra-ldflags=-arch $ARCH")
@@ -177,7 +243,34 @@ mkdir -p "$INSTALL/share/tas-ffmpeg"
   echo
 } > "$INSTALL/share/tas-ffmpeg/configure-command.txt"
 
-( cd "$FF_BUILD" && "$FF_SRC/configure" "${TOOLCHAIN[@]}" "${FLAGS[@]}" )
+# *** ALWAYS SURFACE ffbuild/config.log WHEN configure FAILS. ***
+#
+# configure prints ONE line on failure and then tells you to look at a file
+# that lives inside a container / a runner that is about to be destroyed:
+#     ERROR: x265 not found using pkg-config
+#     Include the log file "ffbuild/config.log" produced by configure ...
+# That single line does not distinguish "the .pc is missing", "the .pc is
+# malformed", "pkg-config is not on PATH" or "the probe COMPILED and then
+# failed to LINK" -- four completely different bugs with four different
+# fixes. Six CI rounds were spent inferring which one it was from that line,
+# and the answer (a missing -lpthread on the probe link line) was sitting in
+# config.log's last twenty lines the whole time, in every one of them.
+#
+# The tail is enough: config.log is append-only and configure dies on the
+# first failing check, so the failing test's source, its exact command line
+# and the compiler/linker output are always the last thing in the file.
+if ! ( cd "$FF_BUILD" && "$FF_SRC/configure" "${TOOLCHAIN[@]}" "${FLAGS[@]}" ); then
+  if [ -f "$FF_BUILD/ffbuild/config.log" ]; then
+    printf '\n===== ffbuild/config.log (last 200 lines) =====\n' >&2
+    tail -n 200 "$FF_BUILD/ffbuild/config.log" >&2
+    printf '===== end of ffbuild/config.log =====\n\n' >&2
+  else
+    warn "configure failed before it wrote ffbuild/config.log"
+  fi
+  die "FFmpeg configure failed for $OS/$ARCH -- see the config.log tail above.
+The last check in that log is the one that failed; look for the generated
+test program and the command line under it, not just for the word ERROR."
+fi
 
 # Keep the generated config for provenance and so "why is encoder X missing?"
 # is answerable without a rebuild.

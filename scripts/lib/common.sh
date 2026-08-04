@@ -283,8 +283,19 @@ reviewed commit."
 # several other deps derive their version string from `git describe` too
 # (libaom, libvpx, opus). Those currently report an unknown version; with the
 # tag they report the pinned one.
+#
+# EVERY FAILURE PATH IN HERE USED TO BE SILENT, and that hid a real defect for
+# a full round: on the Windows leg the opus checkout came out with no tags at
+# all, so opus/cmake/OpusPackageVersion.cmake:11-12's
+#     git --git-dir=<src>/.git describe --tags --match "v*"
+# printed "fatal: No names found, cannot describe anything", CMake warned
+# "Could not get package version", and opus built as VERSION 0 -- while the
+# SAME code produced "Opus package version from git repo: 1.6.1" on both Linux
+# and macOS. Nothing said why, because the two `return 0`s and the `|| true`
+# below swallow git's own message. They still do not abort a fetch (a label is
+# not worth failing a build over), but they now SAY SO, with git's stderr.
 restore_pin_tag() {
-  local dest="$1" commit="$2" tag="${3:-}"
+  local dest="$1" commit="$2" tag="${3:-}" err
   [ -n "$tag" ] || return 0
   # Already there (the full-fetch fallback below uses --tags, so real tags can
   # be present) -- leave upstream's own tag object alone.
@@ -297,8 +308,21 @@ restore_pin_tag() {
   # `..`, `~`, `^`, a trailing `.lock` and friends are NOT legal ref names, so
   # ask git rather than guessing, and skip quietly rather than failing a fetch
   # over a label that only ever mattered as documentation.
-  git check-ref-format "refs/tags/$tag" >/dev/null 2>&1 || return 0
-  git -C "$dest" tag -f "$tag" "$commit" >/dev/null 2>&1 || true
+  if ! git check-ref-format "refs/tags/$tag" >/dev/null 2>&1; then
+    warn "$(basename "$dest"): '$tag' is not a legal git ref name, so no local
+tag was attached. Anything in this dependency that derives its version from
+\`git describe\` will report an unknown version."
+    return 0
+  fi
+  err="$(git -C "$dest" tag -f "$tag" "$commit" 2>&1 >/dev/null || true)"
+  if ! git -C "$dest" rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
+    warn "$(basename "$dest"): could not attach the pin tag '$tag' to $commit.
+git said: ${err:-(nothing)}
+The checkout is still correct -- the COMMIT is what is verified -- but any
+dependency that runs \`git describe\` in it will build with an unknown
+version, which lands in its generated .pc file. See build_x265 in
+scripts/build-deps.sh for the case where that is fatal rather than cosmetic."
+  fi
 }
 
 # fetch_git REPO COMMIT DEST_DIR [TAG]

@@ -19,7 +19,10 @@
 #   macOS         no libvpl, no AMF, no nv-codec-headers (no runtime exists)
 #   linux/arm64   no libvpl, no AMF                      (no aarch64 runtime)
 #   non-Linux     no gmp/nettle/GnuTLS  (Schannel / SecureTransport instead)
-#   macOS         no bzip2/xz           (both live in /usr/lib on macOS)
+#   macOS         no bzip2              (bzlib.h is in the SDK, libbz2 in /usr/lib)
+#                 xz IS built on macOS: the dylib is there but lzma.h is NOT
+#                 in the SDK, so --enable-lzma cannot be satisfied from the
+#                 system. See the block comment above build_xz.
 #   non-Windows   no libiconv           (glibc and libSystem provide iconv)
 # Everything else is built on all five targets: win64, linux64, linuxarm64,
 # macos-arm64, macos-x86_64.
@@ -187,9 +190,24 @@ build_zlib() {
 # ImportError on a user's machine and an auditwheel rejection for nelux's
 # manylinux_2_28 wheel. Same reasoning as zlib above; see versions.lock.
 #
-# macOS is deliberately excluded: bzlib, lzma and iconv all come from
-# /usr/lib and the SDK there, which verify-output.sh's macOS allowlist already
-# permits, on the same footing as SecureTransport and VideoToolbox.
+# macOS is excluded for bzlib and iconv ONLY: bzlib.h and iconv.h are in the
+# SDK and libbz2/libiconv are in /usr/lib, which verify-output.sh's macOS
+# allowlist already permits, on the same footing as SecureTransport and
+# VideoToolbox.
+#
+# *** liblzma IS NOT IN THAT CATEGORY, AND ASSUMING IT WAS COST A CI ROUND. ***
+# macOS ships /usr/lib/liblzma.5.dylib for its own tools but publishes NO
+# lzma.h in the SDK, so configure:7188
+#     enabled lzma && check_lib lzma lzma.h lzma_version_number -llzma
+# cannot even compile its probe. lzma is in EXTERNAL_AUTODETECT_LIBRARY_LIST
+# (configure:1977) and flags/ffmpeg.flags:182 REQUESTS it, so the generic
+# guard at configure:8286-8287
+#     requested $lib && ! enabled $lib && die "ERROR: $lib requested but not found"
+# turns that into a hard abort AFTER every dependency has been built:
+#     ERROR: lzma requested but not found
+# Note bzlib is checked first in that same loop (:7187, and it sits above
+# lzma in the list) and passed, which is what proves the header -- not the
+# dylib -- is what macOS is missing.
 #
 # These install ONLY a .a and a header into $PREFIX_DIR, which
 # scripts/build-ffmpeg.sh puts ahead of the toolchain's own directories with
@@ -199,7 +217,7 @@ build_zlib() {
 need_compression_libs() { [ "$OS" != "macos" ]; }
 
 build_bzip2() {
-  need_compression_libs || { log "skipping bzip2 (macOS provides libbz2 in /usr/lib)"; return; }
+  need_compression_libs || { log "skipping bzip2 (macOS SDK provides bzlib.h + /usr/lib/libbz2)"; return; }
   have_stamp bzip2 "$BZIP2_VERSION" && { log "bzip2 up to date"; return; }
   log "building bzip2 $BZIP2_VERSION (static)"
   rm -rf "$WORK_DIR/bzip2"; mkdir -p "$WORK_DIR/bzip2"
@@ -229,8 +247,10 @@ build_bzip2() {
   set_stamp bzip2 "$BZIP2_VERSION"
 }
 
+# NOT guarded by need_compression_libs -- built on ALL THREE OSes. See the
+# block comment above: macOS has the dylib but no lzma.h, so it needs this
+# just as much as Windows and Linux do, only for a different reason.
 build_xz() {
-  need_compression_libs || { log "skipping xz (macOS provides liblzma in /usr/lib)"; return; }
   have_stamp xz "$XZ_VERSION" && { log "liblzma up to date"; return; }
   log "building xz/liblzma $XZ_VERSION (static)"
   rm -rf "$WORK_DIR/xz"; mkdir -p "$WORK_DIR/xz"

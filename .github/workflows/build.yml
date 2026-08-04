@@ -188,8 +188,28 @@ jobs:
         with:
           msystem: MINGW64
           update: true
+          # `autotools` is NOT redundant with base-devel, and assuming it was
+          # cost a CI round. MSYS2's base-devel is a thin meta-package --
+          # base, binutils, bison, diffstat, diffutils, dos2unix, file, flex,
+          # gawk, grep, make, pacman, patch, sed, tar -- and carries NO
+          # autoconf, automake or libtool. zimg ships no pre-generated
+          # configure, so scripts/build-deps.sh build_zimg runs ./autogen.sh,
+          # which is literally `autoreconf --verbose --install --force`, and
+          # the Windows leg died ~28 minutes in, after x264, x265, libvpx and
+          # opus had all been built, with
+          #     ./autogen.sh: line 3: autoreconf: command not found
+          # (exit 127 -- which names no command in the job summary at all).
+          # This is the same failure the macOS leg had; see the Homebrew
+          # install step below, which was fixed and this one was not.
+          #
+          # `autotools` is the msys meta-package that pulls autoconf-wrapper
+          # (provides /usr/bin/autoreconf + every concrete autoconf),
+          # automake-wrapper (aclocal/automake) and libtool (libtoolize).
+          # Naming `autoconf`/`automake` directly does NOT work on MSYS2:
+          # those names do not exist, only the versioned packages and the
+          # wrappers do.
           install: >-
-            base-devel git curl zip unzip
+            base-devel autotools git curl zip unzip
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
