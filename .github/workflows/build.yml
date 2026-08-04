@@ -43,6 +43,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # This repo is authored on Windows, where NTFS has no executable bit, so
+      # a new script lands in git as mode 100644 and every `./scripts/x.sh`
+      # invocation dies with "Permission denied" (exit 126) — which reads like
+      # a runner problem, not a missing chmod. That is exactly how the first
+      # run of this workflow failed. Check it in the cheapest job rather than
+      # discovering it 40 minutes into a build leg.
+      # scripts/lib/*.sh are deliberately excluded: they are sourced, never
+      # executed, and should stay non-executable.
+      - name: Assert scripts are executable
+        run: |
+          bad=0
+          for f in $(git ls-files 'scripts/*.sh'); do
+            case "$f" in scripts/lib/*) continue ;; esac
+            mode=$(git ls-files -s -- "$f" | cut -d' ' -f1)
+            if [ "$mode" != "100755" ]; then
+              echo "::error file=$f::mode $mode, expected 100755 — run: git update-index --chmod=+x $f"
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ] || exit 1
+          echo "all entry-point scripts are mode 100755"
       # See the `Cache pinned sources` step in the build job for why this is
       # safe. Same key, so validate usually POPULATES it for everyone else.
       - name: Cache pinned sources
