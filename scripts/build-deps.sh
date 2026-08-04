@@ -24,6 +24,9 @@
 #                 in the SDK, so --enable-lzma cannot be satisfied from the
 #                 system. See the block comment above build_xz.
 #   non-Windows   no libiconv           (glibc and libSystem provide iconv)
+#   linux/x86_64  ONLY libdrm + libva   (the VAAPI stack; --disable-vaapi on
+#                 linux/arm64 and no libva on Windows/macOS). Both are built
+#                 to be thrown away -- see the VAAPI block below.
 # Everything else is built on all five targets: win64, linux64, linuxarm64,
 # macos-arm64, macos-x86_64.
 #
@@ -335,6 +338,220 @@ build_libvpl() {
   cmake --build "$WORK_DIR/libvpl" -j "$JOBS"
   cmake --install "$WORK_DIR/libvpl"
   set_stamp libvpl "$LIBVPL_COMMIT"
+}
+
+# ===========================================================================
+# VAAPI -- linux/x86_64 only, and linked through Implib.so STUBS.
+#
+# Read versions.lock's VAAPI block first; it carries the whole argument. The
+# one-line version: QSV on Linux needs --enable-vaapi (the QSV hwcontext
+# creates a VAAPI child device), linking libva normally puts DT_NEEDED
+# libva.so.2 / libva-drm.so.2 / libdrm.so.2 into libavutil.so.60, and all
+# three are outside the manylinux_2_28 policy set that nelux's wheel must
+# satisfy. verify-output.sh asserts their ABSENCE, positively, after every
+# Linux build.
+# ===========================================================================
+
+# vaapi_target -- true only where flags/ffmpeg.linux.flags asks for VAAPI.
+# flags/ffmpeg.linux.arm64.flags:41 passes --disable-vaapi (no aarch64 QSV
+# runtime), and Windows/macOS use libva not at all, so building any of this
+# there would be dead weight that still had to be verified and licensed.
+vaapi_target() { [ "$OS" = "linux" ] && [ "$ARCH" = "x86_64" ]; }
+
+# implib_python -- the interpreter that runs implib-gen.py.
+#
+# NOT plain `python3`: on AlmaLinux 8 (the manylinux_2_28 base) /usr/bin/
+# python3 is 3.6, and implib-gen.py is written against a modern Python.
+# The manylinux images ship their own CPythons under /opt/python, and
+# docker/Dockerfile.manylinux_2_28 already pins meson and ninja to the
+# cp312 one -- use the same interpreter so there is a single Python in play.
+implib_python() {
+  local p
+  for p in /opt/python/cp312-cp312/bin/python3 python3; do
+    command -v "$p" >/dev/null 2>&1 || continue
+    # 3.8 is the floor implib-gen.py is realistically tested against; the
+    # 3.6 in EL8's /usr/bin is what this rejects.
+    "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' 2>/dev/null \
+      && { printf '%s' "$p"; return 0; }
+  done
+  die "no Python >= 3.8 found to run Implib.so's implib-gen.py.
+The VAAPI stub generator needs one (see versions.lock IMPLIB_*). Inside
+docker/Dockerfile.manylinux_2_28 this is /opt/python/cp312-cp312/bin/python3."
+}
+
+# gen_implib <input.so> <output.a>
+# ADAPTED FROM BtbN/FFmpeg-Builds images/base-linux64/gen-implib.sh (MIT).
+#
+# Turns a real shared library into a STATIC ARCHIVE of trampolines. Each
+# exported function becomes a stub that, on ITS FIRST CALL, dlopen()s the
+# library by its SONAME and dlsym()s the real symbol. Link that archive
+# instead of the .so and the result has NO DT_NEEDED for it: the loader never
+# sees the dependency, so a machine without libva loads our libraries fine and
+# only pays if it actually asks for QSV.
+#
+# CHANGED vs upstream: no ${FFBUILD_CROSS_PREFIX} (this is a native build, not
+# a crosstool-NG cross-compile) and the interpreter is resolved by
+# implib_python above rather than assumed to be /usr/bin/python3.
+#
+# *** THE ONE BEHAVIOURAL COST, STATED PLAINLY ***
+# Implib.so's generated loader (arch/common/init.c.tpl) does
+#     CHECK(lib_handle, "failed to load library '%s' via dlopen: %s", ...)
+# and CHECK is fprintf + assert(0) + abort(). So on a machine with NO libva at
+# all, asking for QSV aborts the process instead of returning an AVERROR.
+# That is still strictly better than today: with a real DT_NEEDED the same
+# machine cannot load libavutil.so.60 AT ALL -- nelux fails at `import nelux`
+# and TAS fails at `ffmpeg -version`, for every user, whether or not they ever
+# touch QSV. --lazy-load is what confines the cost to the QSV path.
+gen_implib() {
+  local in="$1" out="$2" tmp py cc
+  [ -f "$in" ] || die "gen_implib: $in does not exist.
+The stub is generated FROM the real shared object, so this means libva did
+not install what we expected -- most likely its SONAME moved. Check
+libva/meson.build's soversion (libva_lt_current) against what build_libva
+asks for; a SONAME bump also changes the name the stub dlopen()s at runtime,
+which is not a thing to paper over with a glob."
+  py="$(implib_python)"
+  cc="${CC:-gcc}"
+  command -v readelf >/dev/null 2>&1 \
+    || die "gen_implib needs readelf (implib-gen.py shells out to it to read the
+dynamic symbol table). Install binutils."
+  tmp="$(mktemp -d)"
+  ( cd "$tmp"
+    "$py" "$SRC_DIR/Implib.so/implib-gen.py" \
+      --target x86_64-linux-gnu --dlopen --lazy-load --verbose "$in"
+    # -Wa,--noexecstack: the trampolines are hand-written assembly, and a .S
+    # without an explicit .note.GNU-stack marks the stack EXECUTABLE for the
+    # whole of libavutil.so. -DIMPLIB_HIDDEN_SHIMS keeps the va* symbols
+    # hidden so linking the stub does not make libavutil re-export the VA ABI.
+    # shellcheck disable=SC2086  # CFLAGS must word-split
+    $cc $CFLAGS -Wa,--noexecstack -DIMPLIB_HIDDEN_SHIMS -c ./*.tramp.S ./*.init.c
+    ar -rcs "$out" ./*.tramp.o ./*.init.o )
+  rm -rf "$tmp"
+  [ -f "$out" ] || die "gen_implib produced no archive at $out"
+  log "  stub archive: $(basename "$out") (dlopens $(basename "$in") lazily)"
+}
+
+# pc_add_ldl <path/to/foo.pc>
+# The stub archive calls dlopen/dlsym, so whatever links it needs -ldl. On
+# glibc 2.28 that is a real separate library, not a no-op stub as it is on
+# glibc >= 2.34, and libdl.so.2 IS inside the manylinux_2_28 policy set.
+#
+# BtbN append a second `Libs:` line with `>>`. That works under pkgconf, which
+# accumulates duplicate keys, and is silently DROPPED by freedesktop
+# pkg-config 0.29, which reports "Libs field occurs twice" and returns the
+# first. The image installs pkgconf today, but the failure mode of getting
+# this wrong is a link error 15 minutes later that names neither file, so
+# extend the EXISTING line instead of relying on which implementation is on
+# PATH.
+pc_add_ldl() {
+  local pc="$1"
+  [ -f "$pc" ] || die "$(basename "$pc") was not installed into $(dirname "$pc").
+ffmpeg-8.1.2/configure:7667-7676 finds both libva and libva-drm through
+pkg-config and there is no fallback; a missing .pc here means vaapi silently
+fails to configure, and configure:8285-8287 then hard-dies because
+--enable-vaapi was requested."
+  grep -q '^Libs:' "$pc" || die "$(basename "$pc") has no Libs: line to extend"
+  grep -q -- '-ldl' "$pc" && return 0   # idempotent
+  sed -i.bak -e 's|^Libs:.*|& -ldl|' "$pc"
+  rm -f "$pc.bak"
+}
+
+# ---------------------------------------------------------------------------
+# libdrm -- STATIC, and only because libva refuses to build without it.
+#
+# libva/meson.build:88 does dependency('libdrm', '>= 2.4.75', required: true)
+# on every non-Windows host, and libva-drm.pc then carries it onto FFmpeg's
+# link line because scripts/build-ffmpeg.sh passes --pkg-config-flags=--static.
+# We do NOT pass --enable-libdrm, so no FFmpeg object references a drm* symbol
+# and the linker extracts ZERO members from this archive -- it exists purely so
+# `-ldrm` resolves to something that is not the system libdrm.so.2.
+#
+# Every per-GPU KMS helper is off. BtbN enable -Dintel/nouveau/radeon/amdgpu
+# and consequently have to build libpciaccess as well; libdrm_intel and
+# friends are separate libraries that nothing here links, so that whole recipe
+# is not ported.
+# ---------------------------------------------------------------------------
+build_libdrm() {
+  vaapi_target || { log "skipping libdrm (VAAPI stack is linux/x86_64 only)"; return; }
+  have_stamp libdrm "$LIBDRM_COMMIT" && { log "libdrm up to date"; return; }
+  log "building libdrm $LIBDRM_TAG (static, prerequisite of libva)"
+  rm -rf "$WORK_DIR/libdrm"
+  meson setup "$WORK_DIR/libdrm" "$SRC_DIR/libdrm" \
+    --prefix="$PREFIX_DIR" --libdir=lib --buildtype=release \
+    --default-library=static \
+    -Dtests=false -Dinstall-test-programs=false -Dudev=false \
+    -Dcairo-tests=disabled -Dvalgrind=disabled -Dman-pages=disabled \
+    -Dintel=disabled -Dradeon=disabled -Damdgpu=disabled -Dnouveau=disabled \
+    -Dvmwgfx=disabled -Dfreedreno=disabled -Dvc4=disabled -Detnaviv=disabled \
+    -Domap=disabled -Dexynos=disabled -Dtegra=disabled
+  ninja -C "$WORK_DIR/libdrm" -j "$JOBS"
+  ninja -C "$WORK_DIR/libdrm" install
+  [ -f "$PREFIX_DIR/lib/pkgconfig/libdrm.pc" ] \
+    || die "libdrm installed no libdrm.pc; libva's dependency('libdrm') will not resolve"
+  [ -f "$PREFIX_DIR/lib/libdrm.a" ] \
+    || die "libdrm installed no static libdrm.a. --default-library=static was
+ignored, which means -ldrm on FFmpeg's link line would resolve against the
+SYSTEM libdrm.so.2 and put a DT_NEEDED outside the manylinux_2_28 policy set
+into libavutil.so.$SONAME_AVUTIL."
+  set_stamp libdrm "$LIBDRM_COMMIT"
+}
+
+# ---------------------------------------------------------------------------
+# libva -- built SHARED, then replaced by Implib.so stub archives and deleted.
+#
+# The .so we build is a means to an end: it is what the stub generator reads
+# the exported symbol table out of, and it is what fixes the name the stubs
+# dlopen at runtime (its SONAME, libva.so.2). It is never shipped and never
+# loaded -- the library that actually runs is the USER's libva.so.2, which is
+# the point: it is the copy that knows that machine's driver directory, reads
+# its /etc/libva.conf and matches its installed VA driver. Statically linking
+# our own libva would make US responsible for finding the user's
+# iHD_drv_video.so, from a driverdir baked in at build time that is different
+# on Debian, Fedora and Arch.
+#
+# X11, GLX and Wayland are all off. VAAPI exists here only to give the QSV
+# hwcontext a child device; that path is libva + libva-drm and never touches a
+# display. Neither consumer creates AV_HWDEVICE_TYPE_VAAPI directly, and both
+# run headless (nelux inside a Python process, TAS spawning a CLI). Leaving
+# them on would pull the whole X11 dependency tree in for nothing.
+# ---------------------------------------------------------------------------
+build_libva() {
+  vaapi_target || { log "skipping libva (VAAPI stack is linux/x86_64 only)"; return; }
+  # The stamp covers the stub generator too: a new Implib.so commit changes
+  # the emitted trampolines, which are compiled into what we ship.
+  have_stamp libva "$LIBVA_COMMIT-$IMPLIB_COMMIT" && { log "libva up to date"; return; }
+  log "building libva $LIBVA_TAG (shared, then stubbed with Implib.so $IMPLIB_TAG)"
+  rm -rf "$WORK_DIR/libva"
+  meson setup "$WORK_DIR/libva" "$SRC_DIR/libva" \
+    --prefix="$PREFIX_DIR" --libdir=lib --buildtype=release \
+    --default-library=shared \
+    -Denable_docs=false -Ddisable_drm=false \
+    -Dwith_x11=no -Dwith_glx=no -Dwith_wayland=no -Dwith_win32=no
+  ninja -C "$WORK_DIR/libva" -j "$JOBS"
+  ninja -C "$WORK_DIR/libva" install
+
+  # libva/meson.build:59-63 computes soversion from the VA-API version:
+  # VA-API 1.24.0 -> libva.so.2 / libva.so.2.2400.0. Asserted rather than
+  # globbed because the SONAME is ALSO the string the stubs dlopen at runtime;
+  # if upstream ever moves to libva.so.3 we would silently start emitting
+  # binaries that dlopen a library no distribution ships yet.
+  gen_implib "$PREFIX_DIR/lib/libva.so.2"     "$PREFIX_DIR/lib/libva.a"
+  gen_implib "$PREFIX_DIR/lib/libva-drm.so.2" "$PREFIX_DIR/lib/libva-drm.a"
+
+  # DELETE the shared objects. Not tidiness: while libva.so is present in
+  # $PREFIX_DIR/lib, `-lva` resolves to it in preference to libva.a (GNU ld
+  # prefers the shared library when both are on the same -L path) and we would
+  # ship the DT_NEEDED after all -- the exact failure this whole recipe
+  # exists to prevent, silently, with a green build.
+  rm -f "$PREFIX_DIR"/lib/libva.so* "$PREFIX_DIR"/lib/libva-drm.so*
+  ls "$PREFIX_DIR"/lib/libva*.so* >/dev/null 2>&1 \
+    && die "libva shared objects still present in $PREFIX_DIR/lib after the stub
+generation -- -lva would resolve to the .so and libavutil would acquire
+DT_NEEDED libva.so.2."
+
+  pc_add_ldl "$PREFIX_DIR/lib/pkgconfig/libva.pc"
+  pc_add_ldl "$PREFIX_DIR/lib/pkgconfig/libva-drm.pc"
+  set_stamp libva "$LIBVA_COMMIT-$IMPLIB_COMMIT"
 }
 
 # ===========================================================================
@@ -693,6 +910,10 @@ build_libiconv
 build_nvcodec
 build_amf
 build_libvpl
+# libdrm before libva: libva/meson.build:88 requires libdrm >= 2.4.75 and both
+# resolve through $PREFIX_DIR/lib/pkgconfig. Both no-op off linux/x86_64.
+build_libdrm
+build_libva
 build_x264
 build_x265
 build_openh264

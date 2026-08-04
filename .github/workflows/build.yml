@@ -229,8 +229,8 @@ jobs:
       # MUST be this image. nelux ships manylinux_2_28 wheels and auditwheel
       # rejects any bundled .so referencing a glibc newer than 2.28.
       # The base image comes from versions.lock -- nothing in this workflow
-      # hardcodes it. Same Dockerfile for both arches; it skips nasm/yasm and
-      # libva on aarch64 via TARGETARCH.
+      # hardcodes it. Same Dockerfile for both arches; it skips nasm/yasm on
+      # aarch64 via TARGETARCH.
       - name: Build Linux image
         if: matrix.container
         run: |

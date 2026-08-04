@@ -28,6 +28,9 @@ require_lock FFMPEG_VERSION FFMPEG_URL FFMPEG_SHA256 FFMPEG_COMMIT \
              AMF_TAG AMF_COMMIT AMF_REPO \
              OPENH264_TAG OPENH264_COMMIT OPENH264_REPO \
              VMAF_TAG VMAF_COMMIT VMAF_REPO \
+             LIBVA_TAG LIBVA_COMMIT LIBVA_REPO \
+             LIBDRM_TAG LIBDRM_COMMIT LIBDRM_REPO \
+             IMPLIB_TAG IMPLIB_COMMIT IMPLIB_REPO \
              GMP_VERSION GMP_URL GMP_SHA256 \
              NETTLE_VERSION NETTLE_URL NETTLE_SHA256 \
              GNUTLS_VERSION GNUTLS_URL GNUTLS_SHA256 \
@@ -155,6 +158,20 @@ fetch_git "$VMAF_REPO"    "$VMAF_COMMIT"    "$SRC_DIR/vmaf"             "$VMAF_T
 # Windows + Linux only, but again: always fetched, for the source archive.
 fetch_git "$LIBVPL_REPO"  "$LIBVPL_COMMIT"  "$SRC_DIR/libvpl"           "$LIBVPL_TAG"
 fetch_git "$AMF_REPO"     "$AMF_COMMIT"     "$SRC_DIR/AMF"              "$AMF_TAG"
+
+# --- VAAPI stack (linux/x86_64 only at build time, always fetched) ---------
+# See versions.lock LIBVA_*/LIBDRM_*/IMPLIB_* for the whole argument. Short
+# version: QSV on Linux needs VAAPI compiled in, VAAPI linked normally puts
+# DT_NEEDED libva.so.2 into libavutil.so.60, that DT_NEEDED breaks nelux's
+# manylinux_2_28 wheel, and Implib.so is what removes it.
+#
+# Fetched on EVERY platform even though only linux/x86_64 builds them, exactly
+# like libvpl and AMF above: $SRC_DIR is what scripts/corresponding-source.sh
+# packages, and Implib.so's emitted shim is compiled into a binary we ship, so
+# all three have to be in the source archive and in licenses/.
+fetch_git "$LIBDRM_REPO"  "$LIBDRM_COMMIT"  "$SRC_DIR/libdrm"           "$LIBDRM_TAG"
+fetch_git "$LIBVA_REPO"   "$LIBVA_COMMIT"   "$SRC_DIR/libva"            "$LIBVA_TAG"
+fetch_git "$IMPLIB_REPO"  "$IMPLIB_COMMIT"  "$SRC_DIR/Implib.so"        "$IMPLIB_TAG"
 
 # --- TLS stack (Linux only at build time, always fetched for the archive) ---
 # See versions.lock: GnuTLS is the ONLY GPL-compatible TLS backend FFmpeg

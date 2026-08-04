@@ -35,7 +35,11 @@
 #      nelux wheel unimportable.
 #   8. Linux: no GLIBC symbol newer than 2.28 (auditwheel rejects the whole
 #      nelux manylinux_2_28 wheel otherwise), plus the same import allowlist
-#      applied to DT_NEEDED.
+#      applied to DT_NEEDED -- and, on x86_64, a POSITIVE pair of assertions
+#      about VAAPI: that libva/libva-drm/libdrm appear in NO DT_NEEDED, and
+#      that VAAPI is nevertheless compiled in and still reaching libva through
+#      the Implib.so stub. Stated in both directions on purpose: absence alone
+#      is also what a build that silently lost QSV looks like.
 #   9. macOS: the same import allowlist applied to otool -L.
 # ---------------------------------------------------------------------------
 set -euo pipefail
@@ -439,8 +443,108 @@ if [ "$OS" = "linux" ]; then
       done < <(objdump -p "$f" 2>/dev/null | awk '/NEEDED/{print $2}')
     done
     ok "Linux DT_NEEDED allowlist check complete"
+
+    # --- VAAPI is DLOPEN'd, not DT_NEEDED (part 1 of 2) --------------------
+    #
+    # The allowlist above already rejects libva.so.2 -- but only by OMISSION,
+    # and an allowlist is one careless widening away from stopping. This says
+    # it in the other direction, by name, so the diff that would break it has
+    # to argue with a check that exists specifically for it.
+    #
+    # flags/ffmpeg.linux.flags:39 passes --enable-vaapi because QSV on Linux
+    # creates a VAAPI child device, and h264_qsv / hevc_qsv / vp9_qsv are all
+    # REQUIRED on this platform (flags/required-components.txt:108-110). The
+    # only way to have both that and a wheel-safe dependency closure is the
+    # Implib.so stub (scripts/build-deps.sh build_libva): every VA entry point
+    # is a trampoline that dlopen()s the user's own libva.so.2 on first call.
+    #
+    # If someone reinstates libva-devel in docker/Dockerfile.manylinux_2_28,
+    # deletes the `rm` of the .so in build_libva, or enables --enable-libdrm,
+    # the corresponding DT_NEEDED reappears and lands here.
+    if [ "$ARCH" = "x86_64" ]; then
+      vaapi_dt_needed=0
+      for f in "$INSTALL"/lib/*.so.* "$INSTALL"/bin/ffmpeg "$INSTALL"/bin/ffprobe; do
+        [ -f "$f" ] || continue
+        while IFS= read -r so; do
+          case "$so" in
+            libva.so.*|libva-drm.so.*|libva-x11.so.*|libdrm.so.*|libpciaccess.so.*)
+              vaapi_dt_needed=1
+              bad "$(basename "$f") has DT_NEEDED '$so'. The VAAPI stack must be
+reached through the Implib.so stub archives, NEVER as a link-time dependency:
+libva.so.2, libva-drm.so.2 and libdrm.so.2 are all outside the manylinux_2_28
+policy set, so auditwheel either vendors them into nelux's wheel or rejects
+it, and TAS's bin/ffmpeg will not start at all on a machine that lacks them.
+Look at build_libva in scripts/build-deps.sh (is the .so still being deleted
+after gen_implib?) and at docker/Dockerfile.manylinux_2_28 (did libva-devel
+come back?)." ;;
+          esac
+        done < <(objdump -p "$f" 2>/dev/null | awk '/NEEDED/{print $2}')
+      done
+      [ "$vaapi_dt_needed" -eq 1 ] \
+        || ok "no DT_NEEDED on libva/libva-drm/libdrm anywhere in the tree"
+    fi
   else
     warn "objdump not found -- SKIPPED the glibc floor and DT_NEEDED checks on Linux"
+    # The VAAPI assertion above is NOT allowed to be skipped, unlike its
+    # neighbours. The failure it guards is invisible everywhere else: the
+    # build succeeds, ffmpeg runs here (libva is present in the build image
+    # either way), and the breakage only appears when auditwheel repairs
+    # nelux's wheel in ANOTHER repository, or on a user's machine.
+    [ "$ARCH" != "x86_64" ] \
+      || bad "objdump is missing, so the VAAPI DT_NEEDED assertion could not run.
+That check is not optional on linux/x86_64 -- install binutils in
+docker/Dockerfile.manylinux_2_28. Refusing to call this build verified."
+  fi
+
+  # --- VAAPI is DLOPEN'd, not DT_NEEDED (part 2 of 2) ----------------------
+  #
+  # Absence of a DT_NEEDED is also what you get if VAAPI simply is not in the
+  # build at all, so on its own the check above would pass a build that had
+  # quietly lost QSV. These two assert the other half: that VAAPI IS compiled
+  # in, and that the mechanism it reaches libva through is still the stub.
+  #
+  # The string test is the one that catches a stub that stopped working. The
+  # generated shim (Implib.so arch/common/init.c.tpl) contains a literal
+  # dlopen("libva.so.2", ...) plus an error message naming the same SONAME, so
+  # the string is present in libavutil if and only if the stub was linked into
+  # it. Combined with part 1 -- which independently forbids the DT_NEEDED that
+  # is the only other way that string could get there -- a hit can only mean
+  # the stub. A miss means someone linked the real library, dropped
+  # --enable-vaapi, or upgraded libva past a SONAME bump.
+  if [ "$ARCH" = "x86_64" ]; then
+    if [ -f "$CFG" ]; then
+      for c in VAAPI VAAPI_DRM; do
+        grep -qE "^#define CONFIG_$c 1\$" "$CFG" \
+          || bad "config.h: CONFIG_$c is not 1. --enable-vaapi was requested
+(flags/ffmpeg.linux.flags:39) but the built binary does not have it, so
+\`-init_hw_device qsv\` will fail at runtime even though the required
+h264_qsv/hevc_qsv/vp9_qsv encoders are listed as present: the QSV hwcontext
+creates a VAAPI CHILD DEVICE. Most likely libva.pc or libva-drm.pc did not
+resolve -- see build_libva in scripts/build-deps.sh."
+      done
+    fi
+    AVUTIL="$INSTALL/lib/libavutil.so.$SONAME_AVUTIL"
+    if [ -f "$AVUTIL" ]; then
+      stub_ok=1
+      for want in libva.so.2 libva-drm.so.2; do
+        LC_ALL=C grep -a -q -F "$want" "$AVUTIL" || {
+          stub_ok=0
+          bad "libavutil.so.$SONAME_AVUTIL does not contain the string '$want'.
+The Implib.so stub is what puts it there (it is the argument to the generated
+dlopen), so this means VAAPI is no longer reaching libva through the stub.
+Either --enable-vaapi was lost, or libva was linked for real -- and if it was
+linked for real the DT_NEEDED check above should also have fired. If libva
+bumped its SONAME past .so.2, the stubs are now dlopening a library no
+distribution ships and build_libva's hardcoded libva.so.2 needs revisiting
+together with this assertion."
+        }
+      done
+      if [ "$stub_ok" -eq 1 ]; then
+        ok "VAAPI reaches libva through the Implib.so stub (lazy dlopen of libva.so.2 / libva-drm.so.2)"
+      fi
+    else
+      bad "no libavutil.so.$SONAME_AVUTIL to check the VAAPI stub against"
+    fi
   fi
 fi
 

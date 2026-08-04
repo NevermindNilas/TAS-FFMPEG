@@ -69,5 +69,49 @@ Note: the MIT grant above covers THIS BUILD SYSTEM ONLY. It does not and
 cannot relicense FFmpeg, x264, x265 or any other dependency, and it does not
 apply to the binaries produced — see section 1.
 
+
+3. THIRD-PARTY CODE INSIDE THE BUILD SYSTEM
+-------------------------------------------
+
+Section 2 says "original work", and that is true of it with one stated
+exception, recorded here because MIT requires the notice to travel with the
+code:
+
+    scripts/build-deps.sh, gen_implib()
+        DERIVED FROM BtbN/FFmpeg-Builds images/base-linux64/gen-implib.sh
+        (https://github.com/BtbN/FFmpeg-Builds), which is:
+
+            The MIT License (MIT)
+            Copyright 2020-2021 BtbN <btbn@btbn.de>
+
+            Permission is hereby granted, free of charge, to any person
+            obtaining a copy of this software and associated documentation
+            files (the "Software"), to deal in the Software without
+            restriction, including without limitation the rights to use,
+            copy, modify, merge, publish, distribute, sublicense, and/or sell
+            copies of the Software, and to permit persons to whom the
+            Software is furnished to do so, subject to the following
+            conditions:
+
+            The above copyright notice and this permission notice shall be
+            included in all copies or substantial portions of the Software.
+
+            THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+            EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+            OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+            NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+            HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+            WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+            FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+            OTHER DEALINGS IN THE SOFTWARE.
+
+        The adaptation, and why it exists, is documented at the function
+        itself and in the VAAPI block of versions.lock.
+
+Implib.so (https://github.com/yugr/Implib.so, MIT) is NOT in this list: it is
+a pinned dependency, not vendored code, and its licence ships with the
+binaries in licenses/Implib.so — which it must, because the trampolines and
+dlopen shim it generates are compiled into libavutil.so on linux/x86_64.
+
 The full GPLv2 text is reproduced in every release archive as
 licenses/ffmpeg/COPYING.GPLv2.

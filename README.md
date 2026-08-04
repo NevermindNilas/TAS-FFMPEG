@@ -279,6 +279,7 @@ zero exit status. So every assertion interrogates the **built artefact**.
 | 6 | Threading is compiled in | See the `--disable-autodetect` trap: the build succeeds and is silently single-threaded |
 | 7 | Windows: every `.def` file is present; no DLL/EXE imports a non-system DLL | A missing `.def` breaks nelux's CMake configure; a dynamic `zlib1.dll` / `libx264-*.dll` / `libwinpthread-1.dll` makes the nelux wheel unimportable |
 | 8 | Linux: no GLIBC symbol newer than 2.28, **and** every `DT_NEEDED` is inside the manylinux_2_28 policy set | `auditwheel` rejects nelux's *entire* wheel over a single bad reference; a stray `libgnutls.so.30` / `libva.so.2` / `libz.so.1` is the Linux spelling of the same bug as #7 |
+| 8b | linux/x86_64: `libva` / `libva-drm` / `libdrm` appear in **no** `DT_NEEDED`, **and** VAAPI is nevertheless compiled in and still reaching libva through the Implib.so stub | Both directions, because absence alone is also what a build that quietly lost QSV looks like. Unlike its neighbours this one does **not** degrade to a warning when `objdump` is missing — the failure it guards is invisible until `auditwheel` runs in another repository |
 | 9 | macOS: every `otool -L` entry is under `/usr/lib`, a system framework, or `@rpath` | Catches a Homebrew build tool leaking into the artefact, which then does not exist on a user's Mac |
 
 Checks 3-5 and 8's `DT_NEEDED` half and 9 are new; the rest were already here.
@@ -549,7 +550,35 @@ the glibc floor after every build so this cannot regress unnoticed.
 
 QSV on Linux additionally needs `--enable-vaapi`: the QSV hwcontext creates a
 VAAPI *child device* at runtime, so without it `-init_hw_device qsv` fails
-even though `h264_qsv` exists. `libva-devel` is installed in the image.
+even though `h264_qsv` exists.
+
+That is awkward, because linking libva the ordinary way gives `libavutil.so.60`
+`DT_NEEDED libva.so.2`, `libva-drm.so.2` and `libdrm.so.2` — none of them in
+the manylinux_2_28 policy set, so `auditwheel` either vendors them into nelux's
+wheel or rejects it, and TAS's `bin/ffmpeg` will not start at all on a machine
+without libva. Dropping `--enable-vaapi` is not an option (`h264_qsv`,
+`hevc_qsv` and `vp9_qsv` are all required on `linux/x86_64`) and widening the
+`DT_NEEDED` allowlist would just delete the check.
+
+So libva and libdrm are **built from pinned source** and libva's shared objects
+are replaced by **[Implib.so](https://github.com/yugr/Implib.so) stub
+archives** — every VA entry point becomes a trampoline that `dlopen`s the
+*user's own* `libva.so.2` on first call. The shipped binaries therefore carry
+no `DT_NEEDED` for any of it, and a machine that never asks for QSV never
+reaches the `dlopen`. `libva-devel` is deliberately **not** installed in the
+image, for the same reason `bzip2-devel` and `xz-devel` are not: so a
+regression cannot silently resolve `-lva` against a system `.so`.
+This is BtbN/FFmpeg-Builds' solution to the same problem, adapted to a native
+build (`versions.lock` `LIBVA_*`/`LIBDRM_*`/`IMPLIB_*`,
+`scripts/build-deps.sh` `build_libva`). `verify-output.sh` asserts both halves
+positively after every Linux build: that those `DT_NEEDED` entries are absent,
+*and* that VAAPI is still compiled in and still going through the stub.
+
+The one behavioural cost, stated plainly: Implib.so's generated loader
+`abort()`s if the `dlopen` fails, so asking for QSV on a machine with no libva
+at all crashes instead of returning an error. That is still strictly better
+than the alternative, where the same machine cannot load `libavutil` **at
+all**, for every user, QSV or not.
 
 ---
 
@@ -754,8 +783,13 @@ Treat the first CI run as the real review.
     containers; the others rely on their own detection.
 20. **`--disable-vaapi` on linux/arm64** is a judgement call, not a measured
     one: VAAPI is enabled on x86_64 solely because the QSV hwcontext needs a
-    child device, and QSV is off on aarch64. If an aarch64 user turns out to
-    want VAAPI for a non-Intel GPU, that is one line and one `dnf install`.
+    child device, and QSV is off on aarch64. Turning it on for an aarch64 user
+    with a non-Intel GPU now costs more than it used to — it means building
+    libdrm and libva for that arch and generating the Implib.so stubs with
+    `--target aarch64-linux-gnu` — but the recipes are arch-parameterised
+    everywhere except `gen_implib`'s hardcoded target triple and
+    `build_libva`'s `libva.so.2` SONAME assertion, neither of which changes on
+    aarch64.
 21. **`ffmpeg -devices` on a build without `lavfi`.** `flags/required-
     components.txt` asserts the `lavfi` indev because nelux's tests generate
     media with `-f lavfi`. That assertion is verified against a real 8.1.2

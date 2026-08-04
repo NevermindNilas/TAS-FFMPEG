@@ -124,6 +124,45 @@ license_fallback() {
       # Only a success if we actually captured a notice.
       grep -q 'Permission is hereby granted' "$out"
       ;;
+    libdrm)
+      # mesa/drm has no top-level COPYING or LICENSE either -- the root of the
+      # tree is xf86drm.c/.h, meson.build and the per-driver subdirectories,
+      # nothing else. The licence is MIT and lives per-file.
+      #
+      # Unlike nv-codec-headers, libdrm code is NOT compiled into anything we
+      # ship: it is built as a static archive that nothing references (see
+      # versions.lock LIBDRM_* and build_libdrm). It is collected anyway,
+      # because the pin is in versions.lock and therefore in the
+      # corresponding-source archive, and a source archive whose licences
+      # directory has a hole in it is the same problem in a different place.
+      out="$L/$name/LICENSE.txt"
+      mkdir -p "$L/$name"
+      : > "$out"
+      {
+        echo "libdrm ships no standalone licence file."
+        echo
+        echo "It is MIT-licensed per file. The notice below is reproduced"
+        echo "VERBATIM from xf86drm.h -- the header that defines the core API"
+        echo "-- exactly as published at the commit pinned in versions.lock"
+        echo "(LIBDRM_COMMIT). Every other file in the tree carries an"
+        echo "equivalent notice with its own copyright holders; the complete"
+        echo "set travels with the corresponding-source archive."
+        echo
+        echo "==================================================================="
+        echo "xf86drm.h"
+        echo "==================================================================="
+      } >> "$out"
+      if [ -f "$src/xf86drm.h" ]; then
+        # Everything before the first preprocessor line. NOT the "first block
+        # comment" awk used for nv-codec-headers above: xf86drm.h opens with a
+        # doxygen \file header and the MIT notice is the SECOND comment, so
+        # that pattern would capture the wrong one and the grep below would
+        # (correctly) reject it.
+        awk '/^#/{exit} {print}' "$src/xf86drm.h" >> "$out"
+      fi
+      [ -f "$src/README.rst" ] && cp "$src/README.rst" "$L/$name/"
+      grep -q 'Permission is hereby granted' "$out"
+      ;;
     *) return 1 ;;
   esac
 }

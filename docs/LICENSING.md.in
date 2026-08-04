@@ -65,6 +65,9 @@ and also at `share/tas-ffmpeg/configure-command.txt` inside this one.
 | Intel oneVPL dispatcher (libvpl) | MIT | `libvpl/` |
 | AMD AMF headers | MIT | `AMF/` |
 | nv-codec-headers | MIT | `nv-codec-headers/` |
+| libva *(linux/x86_64 only)* | MIT — built, then replaced by an Implib.so stub; no libva code is linked into the binaries, only the generated trampolines | `libva/` |
+| libdrm *(linux/x86_64 only)* | MIT — a build-time prerequisite of libva, linked as a static archive that nothing references, so no libdrm code reaches the binaries | `libdrm/` |
+| Implib.so *(linux/x86_64 only)* | MIT | `Implib.so/` |
 
 Every entry above is permissive or GPL-compatible, so the combined work is
 distributable under GPL-2.0-or-later. Nothing here is nonfree.
@@ -110,5 +113,16 @@ SecureTransport (macOS), and VAAPI (Linux) are used through the operating
 system's own interfaces. NVENC/NVDEC/CUVID and AMF are reached through
 header-only stubs (`nv-codec-headers`, `AMF`) that `dlopen`/`LoadLibrary` the
 vendor driver at runtime; no NVIDIA or AMD binary is redistributed here.
+
+**On libva and libdrm.** VAAPI is genuinely a system component here, not a
+bundled one, and unusually so. `libva` is built from the pinned source purely
+so that [Implib.so](https://github.com/yugr/Implib.so) can generate a static
+archive of trampolines from it; the built `libva.so.2` and `libva-drm.so.2`
+are then **deleted**, and what ships is the trampolines, which `dlopen` *the
+user's own* `libva.so.2` on first use. `libdrm` is required to configure
+libva at all and is linked as a static archive that no shipped object
+references. Both are listed above, and their complete source is in the
+corresponding-source archive, because they are pinned inputs — not because
+their code is in the binaries.
 
 `versions.lock` in this directory records the exact pin for every component.

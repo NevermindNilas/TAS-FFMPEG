@@ -121,6 +121,12 @@ dep_dir() {
     VMAF)     echo vmaf             ;;
     LIBVPL)   echo libvpl           ;;
     AMF)      echo AMF              ;;
+    LIBVA)    echo libva            ;;
+    LIBDRM)   echo libdrm           ;;
+    # Implib.so's OUTPUT is linked into libavutil.so on linux/x86_64 (the
+    # VAAPI stub -- see versions.lock), so it is a shipped component and its
+    # MIT notice has to be collected like any other.
+    IMPLIB)   echo Implib.so        ;;
     BZIP2)    echo bzip2            ;;
     XZ)       echo xz               ;;
     LIBICONV) echo libiconv         ;;

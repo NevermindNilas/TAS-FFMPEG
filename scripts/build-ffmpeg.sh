@@ -144,7 +144,20 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     # manylinux_2_28 policy set and is already allowed by
     # scripts/verify-output.sh's DT_NEEDED allowlist, so this adds no new
     # runtime dependency -- avutil already pulls it in via pthreads_extralibs.
-    TOOLCHAIN+=("--extra-libs=-lpthread")
+    # -lm is here for the SAME REASON, one dependency later. zimg.pc does not
+    # list it either, and static libzimg.a genuinely needs it -- round 7 got
+    # past x265 and died on the next probe with, verbatim from config.log:
+    #     ld: .../libzimg.a(libzimg_internal_la-libm_wrapper.o): undefined
+    #         reference to symbol 'sin@@GLIBC_2.2.5'
+    #     ld: /lib64/libm.so.6: error adding symbols: DSO missing from
+    #         command line
+    #     ERROR: zimg >= 2.7.0 not found using pkg-config
+    # Note the FFmpeg guide quoted above prescribes BOTH ("-lpthread -lm");
+    # the previous round took only half of it and paid a full round for the
+    # other half. libm.so.6 is in the manylinux_2_28 policy set and already in
+    # verify-output.sh's DT_NEEDED allowlist, so this adds no runtime
+    # dependency either.
+    TOOLCHAIN+=("--extra-libs=-lpthread -lm")
     # Built inside manylinux_2_28 -- see docker/Dockerfile.manylinux_2_28.
     # $ORIGIN so ffmpeg/ffprobe find ../lib without LD_LIBRARY_PATH.
     #

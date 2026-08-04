@@ -23,7 +23,18 @@
 # --- Intel QSV -------------------------------------------------------------
 # On Linux the QSV hwcontext creates a VAAPI CHILD DEVICE at runtime, so VAAPI
 # must also be compiled in or `-init_hw_device qsv` fails even though the
-# encoders exist. libva-devel is installed in the Dockerfile.
+# encoders exist.
+#
+# HOW LIBVA IS LINKED, because it is not the obvious way: libva is built from
+# pinned source and then REPLACED BY Implib.so STUB ARCHIVES that dlopen the
+# user's own libva.so.2 on first call (versions.lock LIBVA_*/IMPLIB_*,
+# scripts/build-deps.sh build_libva). Linked normally it would put DT_NEEDED
+# libva.so.2 / libva-drm.so.2 / libdrm.so.2 into libavutil.so.60, all three
+# outside the manylinux_2_28 policy set that nelux's wheel has to satisfy, and
+# a hard load-time failure on any machine without libva. libva-devel is
+# deliberately NOT installed in the Dockerfile any more.
+# scripts/verify-output.sh asserts, positively, that those DT_NEEDED entries
+# are absent AND that the stub is still in place.
 --enable-libvpl                               # both
 --enable-vaapi                                # both -- required by QSV on Linux, not optional
 
@@ -75,7 +86,14 @@
 
 # --- Deliberately NOT enabled ----------------------------------------------
 # vdpau      -- superseded by nvdec, nothing references it
-# libdrm     -- only for VAAPI DRM-prime interop, which neither consumer does
+# libdrm     -- only for VAAPI DRM-prime interop, which neither consumer does.
+#               NOTE: libdrm IS built (versions.lock LIBDRM_*) because libva
+#               will not configure without it, but as a STATIC archive that
+#               nothing references -- precisely because this flag is absent,
+#               so no FFmpeg object names a drm* symbol and the linker
+#               extracts nothing from it. Enabling --enable-libdrm would make
+#               that archive live code and would need its own answer for the
+#               DT_NEEDED question.
 # v4l2_m2m   -- capture/codec devices, unused
 # alsa / sndio / xlib / libxcb -- capture devices; each would add an unpinned
 #               system .so to the runtime dependency closure of a shared build
