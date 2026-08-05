@@ -135,12 +135,29 @@ RUN dnf -y install dnf-plugins-core epel-release \
 #               Normally present already (auditwheel depends on it), but named
 #               here for the same reason as pkgconf: a reinstall is a no-op and
 #               the base image does not contract to carry it.
+# vim-common is here for ONE binary: /usr/bin/xxd.
+#
+# libvmaf embeds its VMAF models by running xxd over model/*.json --
+# vmaf-3.2.0/libvmaf/src/meson.build:130 does
+#     xxd = find_program('xxd', required: false)
+# and skips the ENTIRE embedding block when it is missing. Nothing fails:
+# meson still prints `built_in_models: true`, the build succeeds, and the
+# resulting libvmaf compiles BUILT_IN_MODEL_CNT as 0. The first symptom is at
+# runtime, in the consumer's test suite:
+#     libvmaf WARNING no such built-in model: "vmaf_v0.6.1"
+#     could not load libvmaf model with version: vmaf_v0.6.1
+#     Error initializing filters
+# i.e. the `libvmaf` filter EXISTS and reports itself present, and cannot be
+# used with its default options. That is what shipped until now: verified by
+# running the built ffmpeg.exe from the win64 archive on real hardware.
+# macOS was unaffected -- /usr/bin/xxd is part of the base system there.
 RUN dnf -y install \
       cmake ninja-build \
       pkgconf pkgconf-pkg-config \
       binutils patchelf \
       git curl xz zip \
       libtool autoconf automake \
+      vim-common \
       diffutils file which \
  && if [ "${TARGETARCH}" = "arm64" ]; then \
       echo "aarch64: skipping nasm/yasm (every relevant project uses gas .S there)" ; \

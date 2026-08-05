@@ -52,7 +52,7 @@
 encoder libx264       all   # both -- TAS 12 matchEncoder presets (encodingSettings.py:10-77,273-283); nelux tests (82 refs) + default-encoder probe (VideoEncoder.cpp:45,48,51)
 encoder libx264rgb    all   # nelux -- Encoder.cpp:1191; tests/pixfmt_matrix_bench.py:69-71
 encoder libx265       all   # both -- TAS x265* presets (encodingSettings.py:78-123); nelux Encoder.cpp:1192,1218
-encoder libopenh264   all   # nelux -- LAST entry of the default-encoder probe, VideoEncoder.cpp:46,49,51
+encoder libopenh264   all   # union -- the probe that named it is gone (nelux b4a57fd); a plausible --custom_encoder string, see flags/ffmpeg.flags
 encoder libsvtav1     all   # both -- TAS av1/slow_av1 (encodingSettings.py:212-240); nelux Encoder.cpp:1193,1276,1497
 encoder libaom-av1    all   # both -- nelux Encoder.cpp:1194,1244; tests/test_software_encoders.py:83
 encoder libvpx-vp9    all   # both -- TAS `vp9` preset (encodingSettings.py:268); nelux tests/test_codec_container_parity.py:27
@@ -116,9 +116,9 @@ encoder h264_amf      windows,linux/x86_64   # TAS -- h264_amf preset, encodingS
 encoder hevc_amf      windows,linux/x86_64   # TAS -- hevc_amf/hevc_amf_10bit, encodingSettings.py:245-263
 
 # ENCODERS -- OS-native video toolchains.
-encoder h264_mf       windows   # nelux -- FIRST entry of the Windows default-encoder probe, VideoEncoder.cpp:45
+encoder h264_mf       windows   # nelux -- the HARDCODED default codec, VideoEncoder.cpp:58 (was the probe's first entry; there is no probe now)
 encoder hevc_mf       windows   # nelux -- tests/output/gray_all_codecs.py:47
-encoder h264_videotoolbox   macos   # nelux -- macOS default-encoder probe, VideoEncoder.cpp:48
+encoder h264_videotoolbox   macos   # union -- the macOS probe that named it is gone; kept as the platform's H.264 hw encoder
 encoder hevc_videotoolbox   macos   # union -- the only other macOS hw encoder; reachable from --custom_encoder
 encoder prores_videotoolbox macos   # union -- same
 

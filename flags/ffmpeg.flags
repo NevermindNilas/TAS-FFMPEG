@@ -210,14 +210,20 @@
 # scripts/verify-output.sh against the generated config.h.
 #
 # --- nelux ---------------------------------------------------------------
-#   DEFAULT ENCODER  a runtime PROBE, not a hardcoded name
-#                    (Nelux/src/Nelux/python/VideoEncoder.cpp:38-88):
-#                      Windows  h264_mf, libx264, libopenh264
-#                      macOS    libx264, h264_videotoolbox, libopenh264
-#                      Linux    libx264, libopenh264
-#                    Throws at :83-87 naming every candidate if none resolves.
-#                    All of them are built here, on the platforms where they
-#                    can exist, so the probe's FIRST entry always wins.
+#   DEFAULT ENCODER  the single hardcoded name "h264_mf", with no probe and no
+#                    platform guard (Nelux/src/Nelux/python/VideoEncoder.cpp:58
+#                    `props.codec = codec.value_or("h264_mf")`; the docstring at
+#                    python/Bindings.cpp:544 says the same).
+#                    RE-VERIFIED against nelux b4a57fd. An EARLIER nelux
+#                    revision probed h264_mf -> libx264 -> libopenh264 on
+#                    Windows and libx264 -> h264_videotoolbox -> libopenh264
+#                    elsewhere; that probe is GONE -- `libopenh264` and
+#                    `videotoolbox` now have zero hits in all of Nelux/src and
+#                    Nelux/include. Anything below that cites the probe is
+#                    describing history, not current code.
+#                    Consequence for THIS build: --enable-mediafoundation is
+#                    load-bearing on Windows, because h264_mf is not a first
+#                    preference any more, it is the only default there is.
 #   NVENC names hardcoded at Nelux/include/Nelux/backends/Encoder.hpp:22-24:
 #                    h264_nvenc, hevc_nvenc, av1_nvenc
 #   AV1 decoder preference chain, Nelux/src/Nelux/backends/Decoder.cpp:151:
@@ -345,17 +351,20 @@
 # the BT.2020 path is still reachable.)
 --enable-libzimg                              # TAS
 
-# libopenh264 -- the LAST-RESORT H.264 encoder in nelux's default-encoder
-# probe. nelux no longer hardcodes "h264_mf"; VideoEncoder.cpp:38-88 probes,
-# in order:
-#     Windows  h264_mf -> libx264 -> libopenh264       (:45-46)
-#     macOS    libx264 -> h264_videotoolbox -> libopenh264  (:48-49)
-#     Linux    libx264 -> libopenh264                  (:51)
-# and throws at :83-87 naming all candidates if none exists. libx264 is
-# always present here so the probe never actually reaches the last entry --
-# but the probe is the ONLY place nelux degrades gracefully instead of
-# throwing, and shipping the encoder it names costs ~1 MB. BSD-2-Clause, so
-# no licence interaction with --enable-gpl.
+# libopenh264 -- KEPT ON THE UNION RULE ONLY. Its original justification is
+# gone: it was the last-resort entry of nelux's default-encoder probe, and
+# that probe no longer exists (see the DEFAULT ENCODER note above). As of
+# nelux b4a57fd there are ZERO references to openh264 in any of the four
+# consumer repos.
+#
+# It stays because it is a plausible `--custom_encoder` / `codec=` string for
+# an H.264 encoder, and because the file's standing rule is over-inclusion.
+# It is, however, the one dependency here that nothing measurable needs: drop
+# --enable-libopenh264, its OPENH264_* pin in versions.lock, build_openh264 in
+# scripts/build-deps.sh and the `encoder libopenh264` line in
+# flags/required-components.txt together, and the build loses a pinned source,
+# a compile step and ~1 MB. BSD-2-Clause, so no licence interaction with
+# --enable-gpl.
 # NOTE: we build OpenH264 from source, so Cisco's H.264 royalty coverage --
 # which applies only to Cisco's own prebuilt binaries -- does NOT apply.
 # That is the same patent position we already have from libx264/libx265.

@@ -215,6 +215,48 @@ if [ "$RUNNABLE" -eq 1 ]; then
 fi
 
 # ===========================================================================
+# 3b. filters that need a RUNTIME asset, not just a symbol
+#
+# The component contract (check 5) proves a filter is COMPILED IN. For most
+# filters that is the whole story. For libvmaf it is not: the filter can be
+# present, listed by `ffmpeg -filters`, and unusable.
+#
+# libvmaf loads a model, and `model` defaults to version=vmaf_v0.6.1. Those
+# models are embedded at build time by running xxd over model/*.json --
+# vmaf/libvmaf/src/meson.build asks for xxd with `required: false`, so a build
+# host without it produces a libvmaf with BUILT_IN_MODEL_CNT == 0 while every
+# other signal (meson's `built_in_models: true`, the .a, the .pc, configure,
+# `ffmpeg -filters`) says success. Every invocation then dies with
+#     libvmaf WARNING no such built-in model: "vmaf_v0.6.1"
+#     Error initializing filters
+#
+# That shipped on win64 and linux64 while macOS was fine, and nothing in CI
+# noticed, because nothing in CI RAN the filter. So run it. This is the
+# assertion; scripts/build-deps.sh has the matching build-time one.
+#
+# nelux's quality gate is the consumer that would have found it instead:
+# Nelux/tests/test_software_encoders.py:181 RAISES at :198 when this fails.
+# ===========================================================================
+if [ "$RUNNABLE" -eq 1 ]; then
+  vmaf_log="$TMP/vmaf.log"
+  if "$FFMPEG" -hide_banner -loglevel warning \
+       -f lavfi -i "testsrc2=size=64x64:rate=5:duration=0.4" \
+       -f lavfi -i "testsrc2=size=64x64:rate=5:duration=0.4" \
+       -lavfi "[0:v][1:v]libvmaf=feature=name=psnr\|name=float_ssim" \
+       -f null - >"$vmaf_log" 2>&1 && ! grep -qi 'no such built-in model' "$vmaf_log"; then
+    ok "libvmaf runs with its default model (built-in models are embedded)"
+  else
+    bad "the libvmaf filter exists but CANNOT RUN:
+$(sed 's/^/    /' "$vmaf_log" | tail -5)
+  libvmaf was built without its VMAF models -- xxd was missing on the build
+  host, so vmaf/libvmaf/src/meson.build silently skipped model embedding.
+  Nelux/tests/test_software_encoders.py:181 fails on exactly this. Install xxd
+  (MSYS2 'vim', RHEL 'vim-common') and rebuild; build-deps.sh now hard-fails
+  first."
+  fi
+fi
+
+# ===========================================================================
 # 4. licence: GPL, not nonfree, not version3
 # ===========================================================================
 if [ "$RUNNABLE" -eq 1 ]; then

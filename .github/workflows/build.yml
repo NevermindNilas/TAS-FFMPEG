@@ -226,8 +226,17 @@ jobs:
           # Naming `autoconf`/`automake` directly does NOT work on MSYS2:
           # those names do not exist, only the versioned packages and the
           # wrappers do.
+          # `vim` is here for ONE binary: /usr/bin/xxd. libvmaf embeds its
+          # VMAF models by running xxd over model/*.json, and
+          # vmaf-3.2.0/libvmaf/src/meson.build:130 asks for it with
+          # `required: false` -- so without xxd the embedding block is skipped
+          # SILENTLY, meson still prints `built_in_models: true`, and the
+          # shipped libvmaf has zero models. `-lavfi libvmaf` then dies with
+          # `no such built-in model: "vmaf_v0.6.1"` on the consumer's machine,
+          # which is exactly what nelux's test_software_encoders.py gate hits.
+          # scripts/build-deps.sh now hard-fails if xxd is absent.
           install: >-
-            base-devel autotools git curl zip unzip
+            base-devel autotools vim git curl zip unzip
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja

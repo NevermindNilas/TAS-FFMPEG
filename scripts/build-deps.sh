@@ -777,12 +777,44 @@ build_openh264() {
 #   * `float_ssim` is a FLOAT feature extractor -- pass -Denable_float=true
 #     explicitly rather than trusting the default, because that default has
 #     changed between libvmaf 2.x and 3.x.
-# built_in_models is left at its default (on) so no runtime .json model files
-# have to be shipped or located.
+#   * -Dbuilt_in_models=true IS NOT ENOUGH ON ITS OWN. It is necessary and it
+#     is not sufficient, and the gap between those two is silent. See the xxd
+#     check below.
 # ===========================================================================
 build_vmaf() {
   have_stamp vmaf "$VMAF_COMMIT" && { log "libvmaf up to date"; return; }
   log "building libvmaf $VMAF_TAG"
+
+  # *** xxd IS A HARD REQUIREMENT. DO NOT MAKE THIS A WARNING. ***
+  #
+  # libvmaf embeds its VMAF models by running xxd over model/*.json, and
+  # vmaf-3.2.0/libvmaf/src/meson.build:130 asks for it as
+  #     xxd = find_program('xxd', required: false)
+  # so when it is missing the whole embedding block is skipped and NOTHING
+  # reports a problem: meson still prints `built_in_models: true` in its
+  # options summary, ninja succeeds, libvmaf.a installs, FFmpeg's configure
+  # finds it, and `ffmpeg -filters` lists libvmaf. BUILT_IN_MODEL_CNT is
+  # simply 0, and the failure surfaces on the consumer's machine as
+  #     libvmaf WARNING no such built-in model: "vmaf_v0.6.1"
+  #     could not load libvmaf model with version: vmaf_v0.6.1
+  #     Error initializing filters
+  # for EVERY invocation, including the default one, because `model` defaults
+  # to version=vmaf_v0.6.1.
+  #
+  # This shipped: the win64 and linux64 legs both configured with
+  # `Program xxd found: NO` while macOS found /usr/bin/xxd and worked. It was
+  # caught by running the built ffmpeg.exe by hand, not by CI -- the component
+  # contract asserts the filter EXISTS, and it did.
+  #
+  # Windows gets xxd from MSYS2's `vim`, Linux from `vim-common` in
+  # docker/Dockerfile.manylinux_2_28, macOS from the base system.
+  command -v xxd >/dev/null 2>&1 || die "xxd not found, and libvmaf needs it to
+embed its VMAF models (vmaf/libvmaf/src/meson.build asks for it with
+required:false, so the build would SUCCEED and produce a libvmaf with zero
+models -- the filter would exist and fail at runtime with 'no such built-in
+model'). Install it: MSYS2 \`pacman -S vim\`, RHEL/Alma \`dnf install
+vim-common\`, Debian \`apt install xxd\`. macOS ships it at /usr/bin/xxd."
+
   rm -rf "$WORK_DIR/vmaf"
   meson setup "$WORK_DIR/vmaf" "$SRC_DIR/vmaf/libvmaf" \
     --prefix="$PREFIX_DIR" --libdir=lib --buildtype=release \
@@ -790,6 +822,17 @@ build_vmaf() {
     -Denable_tests=false -Denable_docs=false -Dbuilt_in_models=true
   ninja -C "$WORK_DIR/vmaf" -j "$JOBS"
   ninja -C "$WORK_DIR/vmaf" install
+  # Belt and braces: prove the models actually made it in. meson's own summary
+  # cannot be trusted here (it prints built_in_models: true either way), so
+  # look for the generated model symbols in the archive itself.
+  if command -v nm >/dev/null 2>&1; then
+    if ! nm -g "$PREFIX_DIR/lib/libvmaf.a" 2>/dev/null | grep -q 'vmaf_v0_6_1\|src_vmaf_v0'; then
+      die "libvmaf built WITHOUT its built-in models: no vmaf_v0.6.1 model symbol
+in $PREFIX_DIR/lib/libvmaf.a. The filter would exist and then fail at runtime
+with 'no such built-in model'. Check that xxd is on PATH for the meson run."
+    fi
+    log "libvmaf: built-in models are embedded"
+  fi
   # Same treatment as openh264: libvmaf's build pulls in C++ translation
   # units and meson emits no C++ runtime in Libs.private. configure:7391
   # checks it with require_pkg_config -- also BEFORE x265 -- so a missing
