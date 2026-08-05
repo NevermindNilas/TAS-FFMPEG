@@ -31,7 +31,10 @@ INSTALL="$OUT_DIR/$OS-$ARCH"
 # corrupted bin/ffmpeg -- see the long note in the linux branch below and the
 # assertion after the patchelf loop.
 RPATH_REAL='$ORIGIN:$ORIGIN/../lib'
-RPATH_PLACEHOLDER='/tas-ffmpeg-placeholder-runpath-overwritten-by-patchelf-do-not-ship-this-string-padding-padding-padding'
+# Keep the placeholder readable: FFmpeg bakes the whole configure line into
+# .rodata, so this string is visible in `ffmpeg -buildconf` on every shipped
+# binary. It only has to be at least as long as RPATH_REAL (22 chars).
+RPATH_PLACEHOLDER='/nonexistent/tas-ffmpeg-runpath-placeholder-patched-after-install'
 
 [ -x "$FF_SRC/configure" ] || die "run scripts/fetch-sources.sh first"
 
@@ -471,23 +474,27 @@ new value fits in the old one; otherwise it rewrites the program headers, which
 is what made bin/ffmpeg crash the dynamic loader. Lengthen the placeholder."
 
   _rpath_n=0
+  _rpath_bad=""
   for _f in "$INSTALL"/lib/lib*.so.* "$INSTALL"/bin/ffmpeg "$INSTALL"/bin/ffprobe; do
     [ -f "$_f" ] || continue
     [ -L "$_f" ] && continue
     patchelf --set-rpath "$RPATH_REAL" "$_f"
+    # Read the tag back. An object patchelf skipped would ship pointing at the
+    # placeholder, which is a directory that does not exist.
+    #
+    # This MUST interrogate DT_RUNPATH, not grep the file: FFmpeg embeds the
+    # entire configure command line in .rodata for avutil_configuration() /
+    # `ffmpeg -buildconf`, so the placeholder string appears in every object
+    # no matter what the runpath says. A grep-based version of this check
+    # flagged all nine and cost a round.
+    _got="$(patchelf --print-rpath "$_f" 2>/dev/null || true)"
+    [ "$_got" = "$RPATH_REAL" ] || _rpath_bad="$_rpath_bad
+  $(basename "$_f"): '$_got'"
     _rpath_n=$((_rpath_n + 1))
   done
+  [ -z "$_rpath_bad" ] || die "patchelf did not record the expected runpath
+('$RPATH_REAL') on:$_rpath_bad"
   log "set \$ORIGIN runpath on $_rpath_n ELF objects"
-
-  # Nothing may leave here still carrying the placeholder: an object patchelf
-  # skipped would ship with a runpath pointing at a directory that does not
-  # exist. An object patchelf DID rewrite keeps only the tail of the old
-  # string after the new value's NUL, so matching the placeholder in full is
-  # exactly the "was missed" test.
-  _leftover="$(grep -l -- "$RPATH_PLACEHOLDER" "$INSTALL"/lib/lib*.so.* "$INSTALL"/bin/* 2>/dev/null || true)"
-  [ -z "$_leftover" ] || die "the placeholder runpath survived patchelf in:
-$_leftover
-Those files would ship with a runpath pointing at a path that does not exist."
 
   for _b in "$INSTALL/bin/ffmpeg" "$INSTALL/bin/ffprobe"; do
     [ -x "$_b" ] && _smoke post-patchelf "$_b"
