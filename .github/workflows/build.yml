@@ -91,87 +91,80 @@ jobs:
         run: ./scripts/validate-flags.sh windows linux macos
 
   # -------------------------------------------------------------------------
-  build:
+  # -------------------------------------------------------------------------
+  # Emits the build matrix, optionally filtered to one leg.
+  #
+  # WHY A SEPARATE JOB: the `matrix` context does not exist in a job-level
+  # `if:` -- that condition is evaluated BEFORE the matrix expands, and
+  # referencing it there is a hard parse error that rejects the whole
+  # workflow at dispatch time:
+  #     HTTP 422: Unrecognized named-value: 'matrix'
+  # Filtering the matrix itself is the supported way to build a subset.
+  #
+  # The legs live in .github/build-matrix.json because JSON is what fromJSON
+  # needs. It carries no comments, so the reasoning that used to sit inline
+  # with each entry lives here instead:
+  #
+  #   linuxarm64 -- nelux ships Linux/aarch64 wheels (Nelux/tools/ffmpeg.lock
+  #     LINUXARM64_BTBN_*). Without this leg that platform keeps a BtbN
+  #     fallback whose autobuild tag WILL be pruned, and it is the one target
+  #     where "both consumers run the same build" does not hold.
+  #     `ubuntu-24.04-arm` is a NATIVE aarch64 runner, free for public repos.
+  #
+  #   *** macOS RUNNER LABELS: CHECK BEFORE EVERY RELEASE. *** GitHub retires
+  #     macOS images on a ~2-year cycle and a retired label is a HARD job
+  #     initialisation failure, not a fallback -- it does NOT remap to a newer
+  #     image, so a stale label means the leg simply never runs, and
+  #     `fail-fast: false` would still let the rest publish a release quietly
+  #     missing a platform. macos-15 is Apple Silicon (replaces macos-14,
+  #     unsupported 2026-11-02); macos-15-intel is native x86_64 (replaces
+  #     macos-13, retired 2025-12-04) and is NOT macos-15-large, which is
+  #     also x86_64 but PAID.
+  #     *** x86_64 macOS ENDS AUGUST 2027 *** -- the `-intel` labels are the
+  #     last x86_64 images. README.md and scripts/emit-consumer-pin.sh say so
+  #     too, because both consumers must stop expecting a macos-x86_64
+  #     archive rather than silently fetching a stale one.
+  #
+  #   Both macOS legs and win64 are NATIVE builds, not cross-compiles.
+  #     scripts/build-ffmpeg.sh has a cross-compile branch but
+  #     scripts/build-deps.sh implements none (no -DCMAKE_OSX_ARCHITECTURES,
+  #     no meson cross files), so if target_arch ever disagreed with the
+  #     runner's real architecture the dependencies would build for the host
+  #     while FFmpeg's CFLAGS asked for the other arch.
+  # -------------------------------------------------------------------------
+  setup:
     needs: validate
-    # Two conditions, ONE `if:` key -- YAML allows only one per job, and a
-    # second one is not a merge but a hard parse error that rejects the
-    # whole workflow at dispatch time:
-    #     HTTP 422: failed to parse workflow: 'if' is already defined
-    # 1. PRs run the cheap validate job only.
-    # 2. `targets` selects a single leg while iterating on one platform.
-    #    Expressed as a job-level condition rather than by trimming the
-    #    matrix, so skipped legs still appear in the run -- a silently
-    #    shorter matrix is how a partial run gets mistaken for a full one.
-    if: >-
-      github.event_name != 'pull_request'
-      && (inputs.targets == '' || inputs.targets == 'all'
-          || inputs.targets == matrix.name)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pick
+        run: |
+          t='${{ inputs.targets }}'
+          [ -z "$t" ] && t=all
+          if [ "$t" = all ]; then
+            inc=$(jq -c . .github/build-matrix.json)
+          else
+            inc=$(jq -c --arg t "$t" '[.[] | select(.name == $t)]' .github/build-matrix.json)
+            [ "$(printf '%s' "$inc" | jq 'length')" -gt 0 ] || {
+              echo "::error::targets='$t' matches no leg in .github/build-matrix.json"
+              jq -r '.[].name' .github/build-matrix.json >&2
+              exit 1
+            }
+            echo "::notice::building ONLY $t -- this run cannot publish a release"
+          fi
+          echo "matrix={\"include\":$inc}" >> "$GITHUB_OUTPUT"
+          echo "selected legs: $(printf '%s' "$inc" | jq -r '[.[].name] | join(\", \")')"
+
+  # -------------------------------------------------------------------------
+  build:
+    needs: [validate, setup]
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: win64
-            os: windows-2022
-            target_arch: x86_64
-          - name: linux64
-            os: ubuntu-latest        # host only; the build runs in the container
-            target_arch: x86_64
-            container: true
-            lock_key: MANYLINUX_IMAGE_X86_64
-            docker_platform: linux/amd64
-          # nelux ships Linux/aarch64 wheels (Nelux/tools/ffmpeg.lock:113-119
-          # LINUXARM64_BTBN_*). Without this job that platform keeps a BtbN
-          # fallback whose autobuild tag WILL be pruned, and it is the one
-          # target where "both consumers run the same build" does not hold.
-          #
-          # `ubuntu-24.04-arm` is a NATIVE aarch64 runner (free for public
-          # repos). If that label is unavailable on this account, switch os to
-          # ubuntu-latest and add a docker/setup-qemu-action step before the
-          # image build -- correct, but roughly 10x slower.
-          - name: linuxarm64
-            os: ubuntu-24.04-arm
-            target_arch: arm64
-            container: true
-            lock_key: MANYLINUX_IMAGE_AARCH64
-            docker_platform: linux/arm64
-          # --- macOS runner labels: CHECK THESE BEFORE EVERY RELEASE -------
-          # GitHub retires macOS images on a ~2-year cycle and a retired label
-          # is a HARD job-initialisation failure, not a fallback:
-          #     "The macOS-13 based runner images are now retired."
-          # (actions/runner-images#13046). It does NOT silently remap to a
-          # newer image, so a stale label here means the leg simply never runs
-          # -- and `fail-fast: false` means the rest of the matrix would still
-          # publish a release that is quietly missing a platform.
-          #
-          # macos-15  : Apple Silicon (arm64), GA, free on public repos.
-          #             Replaces macos-14, which is deprecated (brownouts from
-          #             2026-10-05, fully unsupported 2026-11-02).
-          # macos-15-intel : native Intel (x86_64), GA, free on public repos.
-          #             Replaces macos-13 (retired 2025-12-04). NOT the same
-          #             as `macos-15-large`, which is also x86_64 but is a
-          #             PAID larger runner.
-          #
-          # *** x86_64 macOS ENDS IN AUGUST 2027. *** GitHub has stated the
-          # `-intel` labels are the last x86_64 images and that the
-          # architecture will not be supported on Actions after that date
-          # (actions/runner-images#13045). When that happens this leg has to
-          # be dropped, and README.md + scripts/emit-consumer-pin.sh already
-          # say so, because both consumers must stop expecting a
-          # macos-x86_64 archive rather than silently fetching a stale one.
-          #
-          # These are NATIVE builds, not cross-compiles. That matters:
-          # scripts/build-ffmpeg.sh:80-83 has a cross-compile branch, but
-          # nothing in scripts/build-deps.sh implements one (no
-          # -DCMAKE_OSX_ARCHITECTURES, no meson cross files), so if
-          # TARGET_ARCH ever disagreed with the runner's real architecture the
-          # dependencies would be built for the host while FFmpeg's CFLAGS
-          # asked for the other arch.
-          - name: macos-arm64
-            os: macos-15             # Apple Silicon runner -- native
-            target_arch: arm64
-          - name: macos-x86_64
-            os: macos-15-intel       # Intel runner -- native, not cross
-            target_arch: x86_64
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -355,7 +348,7 @@ jobs:
 
   # -------------------------------------------------------------------------
   release:
-    needs: [build, source]
+    needs: [setup, build, source]
     # `targets` must be all: a partial run would publish an archive set and a
     # SHA256SUMS missing four platforms, and both consumers would vendor a
     # pin whose other targets do not exist.
