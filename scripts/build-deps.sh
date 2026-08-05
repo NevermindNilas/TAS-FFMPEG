@@ -823,16 +823,23 @@ vim-common\`, Debian \`apt install xxd\`. macOS ships it at /usr/bin/xxd."
   ninja -C "$WORK_DIR/vmaf" -j "$JOBS"
   ninja -C "$WORK_DIR/vmaf" install
   # Belt and braces: prove the models actually made it in. meson's own summary
-  # cannot be trusted here (it prints built_in_models: true either way), so
-  # look for the generated model symbols in the archive itself.
-  if command -v nm >/dev/null 2>&1; then
-    if ! nm -g "$PREFIX_DIR/lib/libvmaf.a" 2>/dev/null | grep -q 'vmaf_v0_6_1\|src_vmaf_v0'; then
-      die "libvmaf built WITHOUT its built-in models: no vmaf_v0.6.1 model symbol
-in $PREFIX_DIR/lib/libvmaf.a. The filter would exist and then fail at runtime
-with 'no such built-in model'. Check that xxd is on PATH for the meson run."
-    fi
-    log "libvmaf: built-in models are embedded"
+  # cannot be trusted here -- it prints `built_in_models: true` whether or not
+  # the embedding ran.
+  #
+  # Check for the GENERATED SOURCE, not for a symbol in the archive. The
+  # symbol name is not portable: meson uses `xxd -i -n src_@PLAINNAME@` only
+  # when the local xxd supports -n (vim >= 8.2), and falls back to plain
+  # `xxd -i`, which derives the identifier from the input PATH. A `nm -g`
+  # grep for the model name passed on MSYS2 and failed on the other four
+  # targets whose libvmaf was perfectly fine. The .c file is the same
+  # everywhere: meson names the custom_target output '@PLAINNAME@.c'.
+  if ! find "$WORK_DIR/vmaf" -name 'vmaf_v0.6.1.json.c' -print -quit | grep -q .; then
+    die "libvmaf built WITHOUT its built-in models: meson generated no
+vmaf_v0.6.1.json.c under $WORK_DIR/vmaf, which means the xxd embedding step in
+vmaf/libvmaf/src/meson.build was skipped. The filter would exist and fail at
+runtime with 'no such built-in model'. Check that xxd is on PATH."
   fi
+  log "libvmaf: built-in models are embedded"
   # Same treatment as openh264: libvmaf's build pulls in C++ translation
   # units and meson emits no C++ runtime in Libs.private. configure:7391
   # checks it with require_pkg_config -- also BEFORE x265 -- so a missing
