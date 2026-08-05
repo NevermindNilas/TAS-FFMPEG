@@ -539,9 +539,19 @@ docker/Dockerfile.manylinux_2_28. Refusing to call this build verified."
   # --enable-vaapi, or upgraded libva past a SONAME bump.
   if [ "$ARCH" = "x86_64" ]; then
     if [ -f "$CFG" ]; then
-      for c in VAAPI VAAPI_DRM; do
-        grep -qE "^#define CONFIG_$c 1\$" "$CFG" \
-          || bad "config.h: CONFIG_$c is not 1. --enable-vaapi was requested
+      # NOTE the two different PREFIXES, which are not interchangeable and
+      # cost a CI round when they were assumed to be. In ffmpeg-8.1.2's
+      # configure, `vaapi` is in HWACCEL_AUTODETECT_LIBRARY_LIST, which feeds
+      # CONFIG_LIST, so it is emitted as CONFIG_VAAPI. But `vaapi_drm` is in
+      # SYSTEM_LIBRARIES (configure:2565-2571), which configure:2662 folds
+      # into HAVE_LIST -- so it is emitted as HAVE_VAAPI_DRM and
+      # CONFIG_VAAPI_DRM DOES NOT EXIST AT ALL. Asserting the latter fails on
+      # every build no matter how healthy, which is exactly what round 10
+      # reported and round 11 repeated. Note it never complained about
+      # CONFIG_VAAPI: VAAPI was enabled the whole time.
+      for c in CONFIG_VAAPI HAVE_VAAPI_DRM; do
+        grep -qE "^#define $c 1\$" "$CFG" \
+          || bad "config.h: $c is not 1. --enable-vaapi was requested
 (flags/ffmpeg.linux.flags:39) but the built binary does not have it, so
 \`-init_hw_device qsv\` will fail at runtime even though the required
 h264_qsv/hevc_qsv/vp9_qsv encoders are listed as present: the QSV hwcontext

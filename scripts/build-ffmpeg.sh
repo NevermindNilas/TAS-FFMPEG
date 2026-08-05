@@ -308,7 +308,7 @@ cp "$FF_BUILD/config.h"           "$INSTALL/share/tas-ffmpeg/config.h"   2>/dev/
 # configure SUCCEEDS with VAAPI disabled. --enable-vaapi is not in the
 # autodetect-die list the way --enable-lzma is, so a failed libva probe is a
 # warning at most, and the first symptom is verify-output.sh reporting
-#     [VERIFY FAIL] config.h: CONFIG_VAAPI_DRM is not 1
+#     [VERIFY FAIL] config.h: HAVE_VAAPI_DRM is not 1
 # forty minutes later, with no record of WHY the probe failed -- which is
 # exactly how round 10 ended.
 #
@@ -320,7 +320,11 @@ cp "$FF_BUILD/config.h"           "$INSTALL/share/tas-ffmpeg/config.h"   2>/dev/
 if [ "$OS" = linux ] && [ "$ARCH" = x86_64 ]; then
   _vaapi_ok=1
   grep -q '^#define CONFIG_VAAPI 1$'     "$FF_BUILD/config.h" || _vaapi_ok=0
-  grep -q '^#define CONFIG_VAAPI_DRM 1$' "$FF_BUILD/config.h" || _vaapi_ok=0
+  # HAVE_, not CONFIG_: `vaapi_drm` lives in configure's SYSTEM_LIBRARIES
+  # (configure:2565-2571), which configure:2662 folds into HAVE_LIST. There is
+  # no CONFIG_VAAPI_DRM in any FFmpeg build. `vaapi` itself IS a CONFIG_ item
+  # (HWACCEL_AUTODETECT_LIBRARY_LIST -> CONFIG_LIST), hence the asymmetry.
+  grep -q '^#define HAVE_VAAPI_DRM 1$' "$FF_BUILD/config.h" || _vaapi_ok=0
   if [ "$_vaapi_ok" -eq 0 ]; then
     printf '\n===== pkg-config state for the VAAPI stack =====\n' >&2
     printf 'PKG_CONFIG_PATH=%s\n' "${PKG_CONFIG_PATH:-<unset>}" >&2
@@ -340,14 +344,14 @@ if [ "$OS" = linux ] && [ "$ARCH" = x86_64 ]; then
       "$FF_BUILD/ffbuild/config.log" 2>/dev/null | tail -60 | sed 's/^/  /' >&2
     printf '===== end VAAPI diagnostics =====\n\n' >&2
     die "configure succeeded but VAAPI is NOT in the build (CONFIG_VAAPI / \
-CONFIG_VAAPI_DRM). h264_qsv, hevc_qsv and vp9_qsv would be listed as present
+HAVE_VAAPI_DRM). h264_qsv, hevc_qsv and vp9_qsv would be listed as present
 and then fail at runtime, because the QSV hwcontext needs a VAAPI child
 device. See the diagnostics above: they show whether libva/libva-drm/libdrm
 resolved through pkg-config and what configure's own probes did. Most likely
 causes are build_libva's Implib.so stub not satisfying the vaInitialize link
 test, or libva-drm.pc's dependency on our static libdrm not resolving."
   fi
-  log "VAAPI is compiled in (CONFIG_VAAPI + CONFIG_VAAPI_DRM)"
+  log "VAAPI is compiled in (CONFIG_VAAPI + HAVE_VAAPI_DRM)"
 fi
 
 make -C "$FF_BUILD" -j"$JOBS"
