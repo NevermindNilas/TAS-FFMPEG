@@ -93,7 +93,19 @@ jobs:
   # -------------------------------------------------------------------------
   build:
     needs: validate
-    if: github.event_name != 'pull_request'
+    # Two conditions, ONE `if:` key -- YAML allows only one per job, and a
+    # second one is not a merge but a hard parse error that rejects the
+    # whole workflow at dispatch time:
+    #     HTTP 422: failed to parse workflow: 'if' is already defined
+    # 1. PRs run the cheap validate job only.
+    # 2. `targets` selects a single leg while iterating on one platform.
+    #    Expressed as a job-level condition rather than by trimming the
+    #    matrix, so skipped legs still appear in the run -- a silently
+    #    shorter matrix is how a partial run gets mistaken for a full one.
+    if: >-
+      github.event_name != 'pull_request'
+      && (inputs.targets == '' || inputs.targets == 'all'
+          || inputs.targets == matrix.name)
     strategy:
       fail-fast: false
       matrix:
@@ -161,12 +173,6 @@ jobs:
             os: macos-15-intel       # Intel runner -- native, not cross
             target_arch: x86_64
     runs-on: ${{ matrix.os }}
-    # Skip every leg except the selected one. Implemented as a job-level
-    # `if:` rather than by trimming the matrix, so the skipped legs still
-    # appear in the run and it is obvious at a glance that they were not
-    # built -- a silently shorter matrix is how a partial run gets mistaken
-    # for a full one.
-    if: ${{ inputs.targets == '' || inputs.targets == 'all' || inputs.targets == matrix.name }}
     steps:
       - uses: actions/checkout@v4
 
