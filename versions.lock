@@ -312,7 +312,14 @@ AMF_REPO=https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git
 # guarantees a regression cannot silently resolve `-lva` against a system .so
 # instead.
 LIBVA_TAG=2.24.1
-LIBVA_COMMIT=5a99f4a1574755c27327c29ee6736ba979b281e8
+# NOTE: 2.24.1 is an ANNOTATED tag, so `git ls-remote --tags` prints TWO
+# lines for it: the tag OBJECT (5a99f4a...) and the COMMIT it points at
+# (710eb46..., the `^{}` row). A checkout lands on the COMMIT, so that is
+# what belongs here -- recording the tag object made fetch_git abort with
+#   post-checkout HEAD is 710eb465..., expected 5a99f4a1...
+# Always take the `^{}` value. Audited 2026-08-05: libva was the only one
+# of the 15 real-tag pins with this mistake.
+LIBVA_COMMIT=710eb465c6277ee2cac3e6948767b01eebe7e77a
 LIBVA_REPO=https://github.com/intel/libva.git
 
 # libdrm is a BUILD-TIME PREREQUISITE OF LIBVA, not a feature of ours.
