@@ -24,6 +24,15 @@ FF_SRC="$WORK_DIR/ffmpeg-$FFMPEG_VERSION"
 FF_BUILD="$WORK_DIR/build-$OS-$ARCH"
 INSTALL="$OUT_DIR/$OS-$ARCH"
 
+# Linux runpath, in two halves. RPATH_REAL is what ships; RPATH_PLACEHOLDER is
+# what the linker records so patchelf can overwrite it in place rather than
+# rewrite the program headers. The placeholder MUST stay at least as long as
+# the real value or patchelf falls back to the header-rewriting path that
+# corrupted bin/ffmpeg -- see the long note in the linux branch below and the
+# assertion after the patchelf loop.
+RPATH_REAL='$ORIGIN:$ORIGIN/../lib'
+RPATH_PLACEHOLDER='/tas-ffmpeg-placeholder-runpath-overwritten-by-patchelf-do-not-ship-this-string-padding-padding-padding'
+
 [ -x "$FF_SRC/configure" ] || die "run scripts/fetch-sources.sh first"
 
 rm -rf "$FF_BUILD" "$INSTALL"
@@ -158,6 +167,46 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     # verify-output.sh's DT_NEEDED allowlist, so this adds no runtime
     # dependency either.
     TOOLCHAIN+=("--extra-libs=-lpthread -lm")
+
+    # --- a PLACEHOLDER runpath, so patchelf never has to grow the ELF -------
+    #
+    # This is not the real runpath and it must never ship. It exists so that
+    # by the time patchelf runs there is ALREADY a DT_RUNPATH string in
+    # .dynstr with room to spare, which lets patchelf overwrite it BYTE FOR
+    # BYTE instead of rewriting the program headers.
+    #
+    # That distinction is the whole bug. With no runpath at link time,
+    # patchelf had to add one, and on a non-PIE ET_EXEC that means relocating
+    # PT_PHDR and inserting a PT_LOAD. It got that wrong on bin/ffmpeg and
+    # right on bin/ffprobe -- same tool, same invocation, different section
+    # layout -- and the result was a binary whose headers make the dynamic
+    # loader itself segfault:
+    #
+    #     Program received signal SIGSEGV
+    #     #0  dl_main (...) at rtld.c:1834
+    #     #1  _dl_sysdep_start ... #3 _dl_start
+    #
+    # i.e. inside ld-linux while it walks the phdrs, before any library
+    # initialiser runs. That is why LD_BIND_NOW made no difference and why
+    # the Implib.so stub was never the culprit -- nothing of ours had
+    # executed yet. The pre/post-patchelf smoke tests below pinned it: the
+    # same binary ran before patchelf touched it and died after.
+    #
+    # patchelf takes the in-place path when the new value FITS in the old
+    # one, so the placeholder just has to be at least as long as
+    # '$ORIGIN:$ORIGIN/../lib' (22 chars). It is padded far past that so a
+    # future change to the real runpath cannot silently push it back onto the
+    # header-rewriting path.
+    #
+    # There is NO `$` anywhere in this value, which is what makes it safe to
+    # pass through --extra-ldflags at all -- see the long note below about
+    # configure's append() eval turning `$$` into a PID. The literal $ORIGIN
+    # still goes in with patchelf, after install, where nothing evals it.
+    #
+    # --enable-new-dtags keeps this a DT_RUNPATH (what patchelf would have
+    # created), not the transitive DT_RPATH.
+    TOOLCHAIN+=("--extra-ldflags=-Wl,--enable-new-dtags,-rpath,$RPATH_PLACEHOLDER")
+
     # Built inside manylinux_2_28 -- see docker/Dockerfile.manylinux_2_28.
     # $ORIGIN so ffmpeg/ffprobe find ../lib without LD_LIBRARY_PATH.
     #
@@ -411,14 +460,34 @@ docker/Dockerfile.manylinux_2_28 names it explicitly."
     [ -x "$_b" ] && _smoke pre-patchelf "$_b"
   done
 
+  # The placeholder must be able to hold the real value, or patchelf goes back
+  # to relocating PT_PHDR and we are back to a loader that segfaults. Assert it
+  # here, where the fix is one string away, rather than discovering it as a
+  # SIGSEGV forty minutes later.
+  [ "${#RPATH_PLACEHOLDER}" -ge "${#RPATH_REAL}" ] || die \
+"RPATH_PLACEHOLDER (${#RPATH_PLACEHOLDER} chars) is shorter than RPATH_REAL
+(${#RPATH_REAL} chars). patchelf can only overwrite a runpath IN PLACE when the
+new value fits in the old one; otherwise it rewrites the program headers, which
+is what made bin/ffmpeg crash the dynamic loader. Lengthen the placeholder."
+
   _rpath_n=0
   for _f in "$INSTALL"/lib/lib*.so.* "$INSTALL"/bin/ffmpeg "$INSTALL"/bin/ffprobe; do
     [ -f "$_f" ] || continue
     [ -L "$_f" ] && continue
-    patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib' "$_f"
+    patchelf --set-rpath "$RPATH_REAL" "$_f"
     _rpath_n=$((_rpath_n + 1))
   done
   log "set \$ORIGIN runpath on $_rpath_n ELF objects"
+
+  # Nothing may leave here still carrying the placeholder: an object patchelf
+  # skipped would ship with a runpath pointing at a directory that does not
+  # exist. An object patchelf DID rewrite keeps only the tail of the old
+  # string after the new value's NUL, so matching the placeholder in full is
+  # exactly the "was missed" test.
+  _leftover="$(grep -l -- "$RPATH_PLACEHOLDER" "$INSTALL"/lib/lib*.so.* "$INSTALL"/bin/* 2>/dev/null || true)"
+  [ -z "$_leftover" ] || die "the placeholder runpath survived patchelf in:
+$_leftover
+Those files would ship with a runpath pointing at a path that does not exist."
 
   for _b in "$INSTALL/bin/ffmpeg" "$INSTALL/bin/ffprobe"; do
     [ -x "$_b" ] && _smoke post-patchelf "$_b"
