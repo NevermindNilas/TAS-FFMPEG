@@ -105,7 +105,14 @@ for l in $ALL_LIBS; do
   case "$OS" in
     linux)
       if command -v objdump >/dev/null 2>&1; then
-        got="$(objdump -p "$path" 2>/dev/null | awk '/SONAME/{print $2; exit}')"
+        # NOTE: awk must read objdump to EOF. The obvious spelling here is
+        # `awk '/SONAME/{print $2; exit}'`, and it made round 9 die on Linux
+        # with exit code 141 (128+SIGPIPE) before printing a single [ok]:
+        # awk's early exit closes the pipe, objdump takes SIGPIPE, `set -o
+        # pipefail` adopts 141 as the pipeline status and `set -e` kills the
+        # script. macOS never hit it because its branch uses `tail -1`, which
+        # reads to EOF. Take the first match with a flag instead of exiting.
+        got="$(objdump -p "$path" 2>/dev/null | awk '/SONAME/{if(!f){print $2; f=1}}')"
         [ "$got" = "$exp" ] || bad "$exp has DT_SONAME '$got', expected '$exp'"
       fi ;;
     macos)
@@ -345,7 +352,13 @@ if [ "$OS" = "windows" ]; then
   done
   ok ".def files present (nelux regenerates MSVC import libs from these via lib.exe /def:)"
 
-  ALLOWED='^(KERNEL32|USER32|GDI32|ADVAPI32|SHELL32|OLE32|OLEAUT32|WS2_32|SECUR32|NCRYPT|BCRYPT|CRYPT32|PSAPI|SHLWAPI|MSVCRT|api-ms-win-|VCRUNTIME|UCRTBASE|MFPLAT|MFUUID|STRMIIDS|DXGI|D3D11|D3D12|D3D9|AVRT|IMM32|SETUPAPI|CFGMGR32|WINMM|DWMAPI|NORMALIZ|IPHLPAPI|USERENV|VERSION|POWRPROF|MF|MFREADWRITE)'
+  # AVICAP32 and MSVFW32 are genuine Windows system DLLs (System32), pulled in
+  # by libavdevice's vfwcap input device -- which we ship deliberately, because
+  # nelux's own test suite needs libavdevice for `-f lavfi`
+  # (Nelux/tests/test_codec_container_parity.py:38-42). Round 9 flagged
+  # AVICAP32.dll here; it is a false positive, not a dynamically linked
+  # dependency, and neither consumer has to ship it.
+  ALLOWED='^(KERNEL32|USER32|GDI32|ADVAPI32|SHELL32|OLE32|OLEAUT32|WS2_32|SECUR32|NCRYPT|BCRYPT|CRYPT32|PSAPI|SHLWAPI|MSVCRT|api-ms-win-|VCRUNTIME|UCRTBASE|MFPLAT|MFUUID|STRMIIDS|DXGI|D3D11|D3D12|D3D9|AVRT|IMM32|SETUPAPI|CFGMGR32|WINMM|DWMAPI|NORMALIZ|IPHLPAPI|USERENV|VERSION|POWRPROF|MF|MFREADWRITE|AVICAP32|MSVFW32|MSACM32)'
   if command -v objdump >/dev/null 2>&1; then
     for f in "$INSTALL"/bin/*.dll "$INSTALL"/bin/*.exe; do
       [ -e "$f" ] || continue

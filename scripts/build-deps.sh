@@ -953,6 +953,25 @@ if [ "$OS" = windows ]; then
   _pc_pthread_fixed=0
   for _pc in "$PREFIX_DIR"/lib/pkgconfig/*.pc; do
     [ -f "$_pc" ] || continue
+    # -lgcc_s gets the same treatment, for the same reason and from the same
+    # source. x265/source/CMakeLists.txt:1115 builds Libs.private from
+    # CMAKE_CXX_IMPLICIT_LINK_LIBRARIES and its blacklist at :1124-1126 removes
+    # -lc -lpthread -lmingwex -lmingwthrd -lmingw32 -lmoldname -lmsvcrt
+    # -ladvapi32 -lshell32 -luser32 -lkernel32 -- but NOT gcc_s. On MinGW,
+    # -lgcc_s resolves to the IMPORT LIBRARY for libgcc_s_seh-1.dll and sits
+    # ahead of the -lgcc/-lgcc_eh the driver selects under -static-libgcc, so
+    # the unwinder resolves there. Round 9 built and linked cleanly and then
+    # failed verification with:
+    #   [VERIFY FAIL] avcodec-62.dll imports non-system DLL 'libgcc_s_seh-1.dll'
+    # (also avfilter-11.dll and ffmpeg.exe). Dropping it entirely is correct
+    # rather than swapping in a static spelling: build-ffmpeg.sh already passes
+    # --extra-ldflags=-static-libgcc, which makes the driver supply the static
+    # unwinder itself, so removing this leaves nothing unresolved.
+    if grep -qE -- '(^|[[:space:]])-lgcc_s([[:space:]]|$)' "$_pc"; then
+      sed -i.bak -E 's#(^|[[:space:]])-lgcc_s([[:space:]]|$)#\1\2#g' "$_pc"
+      rm -f "$_pc.bak"
+      log "  $(basename "$_pc"): dropped -lgcc_s (-static-libgcc supplies it)"
+    fi
     if grep -qE -- '(^|[[:space:]])-lpthread([[:space:]]|$)' "$_pc"; then
       # NOTE the '#' delimiter: the pattern contains '|' for the alternation,
       # so the usual 's|...|...|' spelling makes sed die with
