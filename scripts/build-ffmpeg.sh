@@ -380,6 +380,37 @@ if [ "$OS" = linux ]; then
 TAS's spawned bin/ffmpeg dies with 'error while loading shared libraries'.
 It is normally present in the manylinux images (auditwheel depends on it);
 docker/Dockerfile.manylinux_2_28 names it explicitly."
+  # --- smoke test, either side of patchelf ---------------------------------
+  # bin/ffmpeg SEGFAULTS on -version on this target while bin/ffprobe from the
+  # same build runs fine. patchelf is a suspect precisely because it is the
+  # only thing that touches the finished ELF, and it rewrites program headers
+  # per binary -- so "same tool, one binary survives, the other does not" is
+  # its known failure shape, not evidence against it.
+  #
+  # Before patchelf there is NO runpath at all, so the libraries have to come
+  # from LD_LIBRARY_PATH; that is the only difference between the two runs
+  # below. Pre-patch OK + post-patch segfault convicts patchelf. Both failing
+  # acquits it and moves the search into FFmpeg or a static dependency.
+  # NOTE the `if`: this script runs under `set -e`, and a bare command that
+  # exits non-zero would take the build down before it could report anything.
+  # A command in an `if` condition is exempt; a bare one is not.
+  _smoke() {  # <when> <binary>
+    if LD_LIBRARY_PATH="$INSTALL/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+         "$2" -hide_banner -version >/dev/null 2>&1; then
+      _src=0
+    else
+      _src=$?
+    fi
+    if [ "$_src" -eq 0 ]; then
+      log "smoke [$1] $(basename "$2") runs"
+    else
+      warn "smoke [$1] $(basename "$2") FAILED, exit $_src$([ "$_src" -gt 128 ] && printf ' (signal %s)' "$((_src - 128))")"
+    fi
+  }
+  for _b in "$INSTALL/bin/ffmpeg" "$INSTALL/bin/ffprobe"; do
+    [ -x "$_b" ] && _smoke pre-patchelf "$_b"
+  done
+
   _rpath_n=0
   for _f in "$INSTALL"/lib/lib*.so.* "$INSTALL"/bin/ffmpeg "$INSTALL"/bin/ffprobe; do
     [ -f "$_f" ] || continue
@@ -388,6 +419,10 @@ docker/Dockerfile.manylinux_2_28 names it explicitly."
     _rpath_n=$((_rpath_n + 1))
   done
   log "set \$ORIGIN runpath on $_rpath_n ELF objects"
+
+  for _b in "$INSTALL/bin/ffmpeg" "$INSTALL/bin/ffprobe"; do
+    [ -x "$_b" ] && _smoke post-patchelf "$_b"
+  done
 fi
 
 log "installed to $INSTALL"

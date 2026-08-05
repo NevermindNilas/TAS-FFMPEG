@@ -142,20 +142,41 @@ for p in "$FFMPEG" "$FFPROBE"; do
     # under it, the fault is in lazy PLT resolution (an IFUNC resolver or a
     # trampoline) rather than in the program itself.
     if [ "$OS" = linux ]; then
+      # *** EVERY COMMAND IN THIS BLOCK MUST BE FAILURE-PROOF. ***
+      # The first version was not, and it cost a whole round: `ldd` on a
+      # binary that segfaults during startup itself exits non-zero, `set -e`
+      # plus `pipefail` killed the script one line into the block, and the run
+      # ended having printed the header "--- ldd ---" and nothing else. The
+      # diagnostics are worthless if the diagnostics can abort. Hence set +e
+      # for the whole block and `|| true` on every pipeline in it.
+      set +e
       printf '\n===== loader diagnostics for %s =====\n' "$(basename "$p")" >&2
-      printf -- '--- ldd ---\n' >&2
-      ldd "$p" 2>&1 | sed 's/^/  /' >&2
+      printf -- '--- ldd (may itself die: ldd runs the program) ---\n' >&2
+      ldd "$p" >"$TMP/ldd.txt" 2>&1
+      _lddrc=$?
+      sed 's/^/  /' "$TMP/ldd.txt" >&2
+      printf '  [ldd exit %s]\n' "$_lddrc" >&2
+      printf -- '--- readelf -d (RUNPATH + DT_NEEDED as recorded) ---\n' >&2
+      readelf -d "$p" 2>&1 | sed -n '1,40p' | sed 's/^/  /' >&2
       printf -- '--- LD_BIND_NOW=1 (eager binding) ---\n' >&2
-      if LD_BIND_NOW=1 "$p" -hide_banner -version >/dev/null 2>&1; then
+      LD_BIND_NOW=1 "$p" -hide_banner -version >/dev/null 2>&1
+      _bn=$?
+      if [ "$_bn" -eq 0 ]; then
         printf '  RUNS under LD_BIND_NOW -- the fault is in LAZY symbol resolution.\n' >&2
         printf '  Look at the Implib.so trampolines (scripts/build-deps.sh gen_implib)\n' >&2
         printf '  and at any IFUNC resolver pulled in from a static dependency.\n' >&2
       else
-        printf '  still fails under LD_BIND_NOW (exit %s)\n' "$?" >&2
+        printf '  still fails under LD_BIND_NOW (exit %s) -- NOT lazy binding.\n' "$_bn" >&2
       fi
       printf -- '--- last libraries the loader touched before dying ---\n' >&2
-      LD_DEBUG=libs "$p" -hide_banner -version 2>&1 >/dev/null | tail -30 | sed 's/^/  /' >&2
+      LD_DEBUG=libs "$p" -hide_banner -version 2>&1 >/dev/null | tail -40 | sed 's/^/  /' >&2
+      if command -v gdb >/dev/null 2>&1; then
+        printf -- '--- gdb backtrace ---\n' >&2
+        gdb -batch -nx -ex run -ex 'bt 25' --args "$p" -hide_banner -version 2>&1 \
+          | tail -40 | sed 's/^/  /' >&2
+      fi
       printf '===== end loader diagnostics =====\n\n' >&2
+      set -e
     fi
   else
     ok "program runs: $(basename "$p")"
