@@ -131,7 +131,32 @@ for p in "$FFMPEG" "$FFPROBE"; do
   if [ ! -f "$p" ]; then
     bad "MISSING $(basename "$p") -- Theanimescripter/src/cli/startup.py:81 hard-fails without it"
   elif ! "$p" -hide_banner -version >/dev/null 2>&1; then
-    bad "$(basename "$p") exists but will not RUN. Usually an unresolved shared library: check the rpath (\$ORIGIN/../lib on Linux, @loader_path/../lib on macOS) or a missing DLL beside the exe."
+    _rc=$?
+    bad "$(basename "$p") exists but will not RUN (exit $_rc$([ "$_rc" -gt 128 ] && printf ', signal %s' "$((_rc - 128))")). Usually an unresolved shared library: check the rpath (\$ORIGIN/../lib on Linux, @loader_path/../lib on macOS) or a missing DLL beside the exe."
+    # A non-zero exit here used to be the END of the information. When ffmpeg
+    # started SEGFAULTING on -version while ffprobe from the same build ran
+    # fine, there was nothing to go on and the cause had to be guessed across
+    # CI rounds. Dump the loader's view instead: which libraries resolve, in
+    # what order, and whether forcing eager binding changes the outcome.
+    # LD_BIND_NOW is the discriminator -- if the crash moves or disappears
+    # under it, the fault is in lazy PLT resolution (an IFUNC resolver or a
+    # trampoline) rather than in the program itself.
+    if [ "$OS" = linux ]; then
+      printf '\n===== loader diagnostics for %s =====\n' "$(basename "$p")" >&2
+      printf -- '--- ldd ---\n' >&2
+      ldd "$p" 2>&1 | sed 's/^/  /' >&2
+      printf -- '--- LD_BIND_NOW=1 (eager binding) ---\n' >&2
+      if LD_BIND_NOW=1 "$p" -hide_banner -version >/dev/null 2>&1; then
+        printf '  RUNS under LD_BIND_NOW -- the fault is in LAZY symbol resolution.\n' >&2
+        printf '  Look at the Implib.so trampolines (scripts/build-deps.sh gen_implib)\n' >&2
+        printf '  and at any IFUNC resolver pulled in from a static dependency.\n' >&2
+      else
+        printf '  still fails under LD_BIND_NOW (exit %s)\n' "$?" >&2
+      fi
+      printf -- '--- last libraries the loader touched before dying ---\n' >&2
+      LD_DEBUG=libs "$p" -hide_banner -version 2>&1 >/dev/null | tail -30 | sed 's/^/  /' >&2
+      printf '===== end loader diagnostics =====\n\n' >&2
+    fi
   else
     ok "program runs: $(basename "$p")"
   fi

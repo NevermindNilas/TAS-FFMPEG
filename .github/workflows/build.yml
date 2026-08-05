@@ -20,6 +20,19 @@ on:
         description: 'Publish a GitHub release'
         type: boolean
         default: false
+      # While iterating on ONE platform there is no reason to spend four other
+      # runners re-proving what already passed. Set this to a single matrix
+      # name (win64 / linux64 / linuxarm64 / macos-arm64 / macos-x86_64) to
+      # build only that leg.
+      #
+      # A partial run must NEVER publish: the release job would assemble an
+      # incomplete set of archives and a SHA256SUMS that silently omits four
+      # platforms, and both consumers would fetch a pin whose other targets do
+      # not exist. The release job's `if:` therefore requires targets == all.
+      targets:
+        description: 'Which leg to build: all, or one matrix name'
+        type: string
+        default: all
 
 permissions:
   contents: write
@@ -148,6 +161,12 @@ jobs:
             os: macos-15-intel       # Intel runner -- native, not cross
             target_arch: x86_64
     runs-on: ${{ matrix.os }}
+    # Skip every leg except the selected one. Implemented as a job-level
+    # `if:` rather than by trimming the matrix, so the skipped legs still
+    # appear in the run and it is obvious at a glance that they were not
+    # built -- a silently shorter matrix is how a partial run gets mistaken
+    # for a full one.
+    if: ${{ inputs.targets == '' || inputs.targets == 'all' || inputs.targets == matrix.name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -331,7 +350,12 @@ jobs:
   # -------------------------------------------------------------------------
   release:
     needs: [build, source]
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+    # `targets` must be all: a partial run would publish an archive set and a
+    # SHA256SUMS missing four platforms, and both consumers would vendor a
+    # pin whose other targets do not exist.
+    if: >-
+      (startsWith(github.ref, 'refs/tags/v') || inputs.release)
+      && (inputs.targets == '' || inputs.targets == 'all')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
