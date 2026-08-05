@@ -442,11 +442,24 @@ if [ "$OS" = "linux" ]; then
     fi
 
     # --- DT_NEEDED allowlist ---
-    # Exactly the manylinux_2_28 policy whitelist plus our own libraries.
-    # A hit here is the Linux equivalent of shipping a dynamic zlib1.dll:
-    # libz.so.1, libx264.so.164, libgnutls.so.30, libva.so.2, libvpl.so.2,
-    # libgmp.so.10 and libstdc++-adjacent surprises all land here.
-    L_ALLOWED='^(libc\.so\.6|libm\.so\.6|libdl\.so\.2|librt\.so\.1|libpthread\.so\.0|libgcc_s\.so\.1|libstdc\+\+\.so\.6|libatomic\.so\.1|libnsl\.so\.1|libutil\.so\.1|libcrypt\.so\.[12]|ld-linux-x86-64\.so\.2|ld-linux-aarch64\.so\.1)$'
+    # A deliberate SUBSET of auditwheel's manylinux_2_28 lib_whitelist, not a
+    # copy of it. auditwheel also permits libz.so.1, libexpat.so.1, libX11 and
+    # the rest of the X/GL set; we do NOT, because we build zlib statically on
+    # purpose and neither consumer wants an X dependency. Being stricter than
+    # the policy is the point: a hit here is the Linux equivalent of shipping a
+    # dynamic zlib1.dll, and libx264.so.164, libgnutls.so.30, libva.so.2,
+    # libvpl.so.2 and libgmp.so.10 all land here.
+    #
+    # libmvec.so.1 IS allowed, and was added after round 10 flagged it:
+    #     [VERIFY FAIL] libavcodec.so.62 has DT_NEEDED 'libmvec.so.1'
+    # It arrived with the --extra-libs=-lm added for zimg -- GCC emits calls
+    # into glibc's vectorised math library when it auto-vectorises libm calls.
+    # That was a FALSE POSITIVE: auditwheel's manylinux_2_28_x86_64
+    # lib_whitelist lists libmvec.so.1 explicitly (pypa/auditwheel,
+    # src/auditwheel/policy/manylinux-policy.json), so the nelux wheel is
+    # unaffected. It ships with glibc itself, so it is present wherever
+    # libc.so.6 is.
+    L_ALLOWED='^(libc\.so\.6|libm\.so\.6|libmvec\.so\.1|libdl\.so\.2|librt\.so\.1|libpthread\.so\.0|libgcc_s\.so\.1|libstdc\+\+\.so\.6|libatomic\.so\.1|libnsl\.so\.1|libutil\.so\.1|libcrypt\.so\.[12]|ld-linux-x86-64\.so\.2|ld-linux-aarch64\.so\.1)$'
     for f in "$INSTALL"/lib/*.so.* "$INSTALL"/bin/ffmpeg "$INSTALL"/bin/ffprobe; do
       [ -f "$f" ] || continue
       while IFS= read -r so; do

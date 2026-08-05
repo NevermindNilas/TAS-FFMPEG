@@ -124,10 +124,21 @@ RUN dnf -y install dnf-plugins-core epel-release \
 #               checks are objdump. The last of those DEGRADES TO A WARNING if
 #               objdump is missing, which would silently skip the checks that
 #               guard the nelux wheel.
+# patchelf    : sets the $ORIGIN runpath on the finished ELF objects
+#               (scripts/build-ffmpeg.sh, after `make install`). It is NOT set
+#               via --extra-ldflags, because the literal string $ORIGIN cannot
+#               survive configure's append() -- which evals its argument -- and
+#               then make and /bin/sh. Two attempts produced two different
+#               silently-wrong runpaths, ':/../lib' and one containing a PID.
+#               Without a correct runpath TAS's spawned bin/ffmpeg dies with
+#               "error while loading shared libraries: libavdevice.so.62".
+#               Normally present already (auditwheel depends on it), but named
+#               here for the same reason as pkgconf: a reinstall is a no-op and
+#               the base image does not contract to carry it.
 RUN dnf -y install \
       cmake ninja-build \
       pkgconf pkgconf-pkg-config \
-      binutils \
+      binutils patchelf \
       git curl xz zip \
       libtool autoconf automake \
       diffutils file which \

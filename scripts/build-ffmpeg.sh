@@ -180,13 +180,27 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     # ...which is exactly the failure TAS hits when it spawns our ffmpeg out of
     # its extracted ffmpeg_shared/ directory.
     #
-    # Wrapping the value in SINGLE QUOTES fixes step 3: make still turns `$$`
-    # into `$`, but sh then sees '$ORIGIN:$ORIGIN/../lib' inside single quotes
-    # and performs no expansion, so ld receives the literal string.
-    # scripts/verify-output.sh now ASSERTS that the built ELF's RUNPATH/RPATH
-    # contains a literal `$ORIGIN`, because this class of bug is invisible to
-    # every other check in this repo.
-    TOOLCHAIN+=("--extra-ldflags=-Wl,-rpath,'\$\$ORIGIN:\$\$ORIGIN/../lib'")
+    # *** THE RPATH IS NOT SET HERE. IT IS SET AFTER INSTALL, WITH patchelf.
+    # *** DO NOT "RESTORE" AN --extra-ldflags=-Wl,-rpath LINE HERE.
+    #
+    # Two attempts died on this, in two different ways, and the second one
+    # revealed why no spelling can work. FFmpeg's configure implements
+    # add_ldflags via append():
+    #
+    #     append(){ var=$1; shift; eval "$var=\"\$$var $*\""; }
+    #
+    # That `eval` RE-EXPANDS the value, so `$$` becomes configure's own PID
+    # at step 1 -- before make or sh are ever reached. Round 10 recorded
+    #     RUNPATH = '92877ORIGIN:92877ORIGIN/../lib'
+    # where 92877 is a process id. The earlier attempt, without the single
+    # quotes, produced `:/../lib` instead when sh expanded the unset $ORIGIN.
+    # Escaping hard enough to survive an eval, then make's `$$` -> `$`, then
+    # sh, is possible in principle and unreadable in practice -- and the two
+    # failure modes above are both silent in every check except the explicit
+    # RUNPATH assertion in scripts/verify-output.sh.
+    #
+    # patchelf runs once, on the finished binaries, with no quoting layers
+    # between the string and the ELF. See the patch_rpath block below.
     ;;
   macos)
     # *** SAME --disable-autodetect ICONV TRAP AS WINDOWS ABOVE. ***
@@ -290,8 +304,87 @@ fi
 cp "$FF_BUILD/ffbuild/config.log" "$INSTALL/share/tas-ffmpeg/config.log" 2>/dev/null || true
 cp "$FF_BUILD/config.h"           "$INSTALL/share/tas-ffmpeg/config.h"   2>/dev/null || true
 
+# --- VAAPI must not be dropped silently -------------------------------------
+# configure SUCCEEDS with VAAPI disabled. --enable-vaapi is not in the
+# autodetect-die list the way --enable-lzma is, so a failed libva probe is a
+# warning at most, and the first symptom is verify-output.sh reporting
+#     [VERIFY FAIL] config.h: CONFIG_VAAPI_DRM is not 1
+# forty minutes later, with no record of WHY the probe failed -- which is
+# exactly how round 10 ended.
+#
+# QSV on Linux depends on this: the QSV hwcontext creates a VAAPI child device,
+# so h264_qsv/hevc_qsv/vp9_qsv are listed as present and then fail at runtime
+# with `-init_hw_device qsv`. TAS's matchEncoder() emits all three.
+#
+# So: fail HERE, where config.log is still at hand, and print the probes.
+if [ "$OS" = linux ] && [ "$ARCH" = x86_64 ]; then
+  _vaapi_ok=1
+  grep -q '^#define CONFIG_VAAPI 1$'     "$FF_BUILD/config.h" || _vaapi_ok=0
+  grep -q '^#define CONFIG_VAAPI_DRM 1$' "$FF_BUILD/config.h" || _vaapi_ok=0
+  if [ "$_vaapi_ok" -eq 0 ]; then
+    printf '\n===== pkg-config state for the VAAPI stack =====\n' >&2
+    printf 'PKG_CONFIG_PATH=%s\n' "${PKG_CONFIG_PATH:-<unset>}" >&2
+    for _m in libva libva-drm libdrm; do
+      if pkg-config --exists "$_m" 2>/dev/null; then
+        printf '  %-10s FOUND    version=%s\n' "$_m" "$(pkg-config --modversion "$_m")" >&2
+        printf '  %-10s   --libs          %s\n' '' "$(pkg-config --libs "$_m" 2>&1)" >&2
+        printf '  %-10s   --static --libs %s\n' '' "$(pkg-config --static --libs "$_m" 2>&1)" >&2
+      else
+        printf '  %-10s NOT FOUND: %s\n' "$_m" "$(pkg-config --print-errors --exists "$_m" 2>&1 | head -3)" >&2
+      fi
+    done
+    printf -- '--- installed .pc files ---\n' >&2
+    ls -1 "$PREFIX_DIR"/lib/pkgconfig/ 2>&1 | sed 's/^/  /' >&2
+    printf -- '--- vaapi probes from config.log ---\n' >&2
+    grep -nE 'vaapi|va/va\.h|va/va_drm\.h|vaInitialize|vaGetDisplayDRM|-lva|-ldrm' \
+      "$FF_BUILD/ffbuild/config.log" 2>/dev/null | tail -60 | sed 's/^/  /' >&2
+    printf '===== end VAAPI diagnostics =====\n\n' >&2
+    die "configure succeeded but VAAPI is NOT in the build (CONFIG_VAAPI / \
+CONFIG_VAAPI_DRM). h264_qsv, hevc_qsv and vp9_qsv would be listed as present
+and then fail at runtime, because the QSV hwcontext needs a VAAPI child
+device. See the diagnostics above: they show whether libva/libva-drm/libdrm
+resolved through pkg-config and what configure's own probes did. Most likely
+causes are build_libva's Implib.so stub not satisfying the vaInitialize link
+test, or libva-drm.pc's dependency on our static libdrm not resolving."
+  fi
+  log "VAAPI is compiled in (CONFIG_VAAPI + CONFIG_VAAPI_DRM)"
+fi
+
 make -C "$FF_BUILD" -j"$JOBS"
 make -C "$FF_BUILD" install
+
+# --- Linux: stamp the runpath AFTER install ---------------------------------
+# Not via --extra-ldflags. See the long comment in the linux branch above: the
+# literal string $ORIGIN cannot survive configure's append(), which evals its
+# argument, and then make's `$$` -> `$`, and then /bin/sh. Two attempts each
+# produced a DIFFERENT silently-wrong runpath (':/../lib' and a PID).
+#
+# patchelf writes the bytes into the ELF directly, so the only quoting that
+# matters is this one pair of single quotes. TAS extracts our tarball and
+# spawns bin/ffmpeg from it, and nelux loads lib/libav*.so from inside its
+# wheel, so both consumers depend on a relocatable runpath -- neither sets
+# LD_LIBRARY_PATH.
+#
+# Symlinks are skipped as an optimisation, not for correctness:
+# libavcodec.so.62 points at libavcodec.so.62.28.102, so patching both just
+# writes the same rpath to the same inode twice, and --set-rpath is
+# idempotent. verify-output.sh reads through symlinks, so coverage is
+# unaffected either way.
+if [ "$OS" = linux ]; then
+  command -v patchelf >/dev/null 2>&1 \
+    || die "patchelf not found. It sets the \$ORIGIN runpath, without which
+TAS's spawned bin/ffmpeg dies with 'error while loading shared libraries'.
+It is normally present in the manylinux images (auditwheel depends on it);
+docker/Dockerfile.manylinux_2_28 names it explicitly."
+  _rpath_n=0
+  for _f in "$INSTALL"/lib/lib*.so.* "$INSTALL"/bin/ffmpeg "$INSTALL"/bin/ffprobe; do
+    [ -f "$_f" ] || continue
+    [ -L "$_f" ] && continue
+    patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib' "$_f"
+    _rpath_n=$((_rpath_n + 1))
+  done
+  log "set \$ORIGIN runpath on $_rpath_n ELF objects"
+fi
 
 log "installed to $INSTALL"
 "$REPO_ROOT/scripts/verify-output.sh" "$INSTALL"
