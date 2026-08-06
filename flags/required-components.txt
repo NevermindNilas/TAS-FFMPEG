@@ -52,7 +52,6 @@
 encoder libx264       all   # both -- TAS 12 matchEncoder presets (encodingSettings.py:10-77,273-283); nelux tests (82 refs) + default-encoder probe (VideoEncoder.cpp:45,48,51)
 encoder libx264rgb    all   # nelux -- Encoder.cpp:1191; tests/pixfmt_matrix_bench.py:69-71
 encoder libx265       all   # both -- TAS x265* presets (encodingSettings.py:78-123); nelux Encoder.cpp:1192,1218
-encoder libopenh264   all   # union -- the probe that named it is gone (nelux b4a57fd); a plausible --custom_encoder string, see flags/ffmpeg.flags
 encoder libsvtav1     all   # both -- TAS av1/slow_av1 (encodingSettings.py:212-240); nelux Encoder.cpp:1193,1276,1497
 encoder libaom-av1    all   # both -- nelux Encoder.cpp:1194,1244; tests/test_software_encoders.py:83
 encoder libvpx-vp9    all   # both -- TAS `vp9` preset (encodingSettings.py:268); nelux tests/test_codec_container_parity.py:27
@@ -84,6 +83,9 @@ encoder zlib          all   # nelux -- tests/output/gray_all_codecs.py:116-122 (
 # subtitle probe is Encoder.cpp:525-527. AV_CODEC_ID_MP3 is deliberately NOT
 # here -- see the MP3 block in flags/ffmpeg.flags.
 encoder aac           all   # both -- nelux Encoder.cpp:398 (1st audio candidate); TAS ffmpegSettings.py:851-859
+encoder libmp3lame    all   # safety net -- the ONLY MP3 encoder on linux/macos; windows would otherwise differ (mp3_mf)
+encoder libvorbis     all   # safety net -- the native `vorbis` encoder is experimental-gated and cannot open without -strict -2
+encoder libwebp       all   # safety net -- the only WebP encoder there is; decode was already native
 encoder libopus       all   # both -- TAS `.webm` -> `-c:a libopus` (ffmpegSettings.py:848); nelux AV_CODEC_ID_OPUS Encoder.cpp:398
 encoder vorbis        all   # nelux -- AV_CODEC_ID_VORBIS, Encoder.cpp:399; the aac->.webm transcode test asserts opus OR vorbis (tests/test_transcode.py:73-83)
 encoder ac3           all   # nelux -- AV_CODEC_ID_AC3, Encoder.cpp:400
@@ -241,6 +243,9 @@ filter anull        all   # union
 filter copy         all   # union
 filter psnr         all   # nelux -- tests/benchmark_quality.py:26-28
 filter ssim         all   # nelux -- tests/benchmark_quality.py:26-28
+filter subtitles    all   # safety net -- subtitle BURN-IN (proves libass linked). NOT what -c:s webvtt/mov_text needs; those are native
+filter ass          all   # safety net -- the same renderer fed a standalone .ass file
+filter drawtext     all   # safety net -- proves libfreetype linked
 filter libvmaf      all   # nelux -- tests/test_software_encoders.py:181 RAISES at :198 without it (proves --enable-libvmaf took)
 filter testsrc      all   # nelux -- test media generation, tests/test_codec_container_parity.py:40-41
 filter testsrc2     all   # nelux -- same

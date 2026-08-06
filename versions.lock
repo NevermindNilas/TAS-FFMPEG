@@ -149,26 +149,6 @@ VPX_COMMIT=1024874c5919305883187e2953de8fcb4c3d7fa6
 VPX_REPO=https://github.com/webmproject/libvpx.git
 
 # ===========================================================================
-# H.264 -- second encoder
-# ===========================================================================
-# OpenH264 (Cisco). The LAST-RESORT entry in nelux's default-encoder probe
-# (Nelux/src/Nelux/python/VideoEncoder.cpp:46,49,51 -- Windows h264_mf ->
-# libx264 -> libopenh264; macOS libx264 -> h264_videotoolbox -> libopenh264;
-# Linux libx264 -> libopenh264). libx264 is always present so the probe never
-# reaches it in practice, but that probe (:60-88) is the ONE place nelux
-# degrades gracefully instead of throwing, and honouring every name it lists
-# costs ~1 MB.
-# configure:7343 requires pkg-config "openh264 >= 1.3.0"; v2.6.0's meson
-# project() declares version 2.6.0 and its pkgconfig module emits openh264.pc.
-# LICENSE: BSD-2-Clause.
-# PATENTS: Cisco's H.264 royalty coverage applies only to CISCO'S OWN
-# prebuilt binaries. We build from source, so it does not apply -- the same
-# position we already occupy via libx264/libx265.
-OPENH264_TAG=v2.6.0
-OPENH264_COMMIT=652bdb7719f30b52b08e506645a7322ff1b2cc6f
-OPENH264_REPO=https://github.com/cisco/openh264.git
-
-# ===========================================================================
 # Quality metrics
 # ===========================================================================
 # libvmaf backs the `libvmaf` FILTER. This is a TEST requirement, not a
@@ -197,6 +177,43 @@ OPUS_TAG=v1.6.1
 OPUS_COMMIT=22244de5a79bd1d6d623c32e72bf1954b56235be
 OPUS_REPO=https://github.com/xiph/opus.git
 
+# --- MP3 and Vorbis: SAFETY NET, not a consumer requirement -----------------
+# Neither is named by nelux, TheAnimeScripter, TAS-Standalone or
+# TAS-AdobeEdition. Both are here because they close a gap a user can walk
+# into through free text:
+#   * TAS-Standalone's `custom_encoder` is an unvalidated text field
+#     (src/shared/schema.ts:462 -> buildArgs.ts:102-107 -> the backend's
+#     ffmpegSettings.py:825 whitespace split), so `-c:a libmp3lame` reaches
+#     the command line verbatim;
+#   * WITHOUT libmp3lame there is NO MP3 ENCODER AT ALL on Linux and macOS.
+#     Windows happens to have `mp3_mf` from MediaFoundation, which is exactly
+#     the kind of platform asymmetry this repo exists to remove.
+#   * FFmpeg's NATIVE `vorbis` encoder is marked experimental and refuses to
+#     open without `-strict -2`, so "the codec exists" was never the same as
+#     "a user can encode Vorbis".
+# libmp3lame also changes what av_guess_codec() returns for matroska (mp3
+# rather than ac3), which nelux's audio passthrough consults at
+# Nelux/src/Nelux/backends/Encoder.cpp:390.
+#
+# LAME has no git upstream, so this one is a verified tarball.
+# LICENSE: LGPL-2.1-or-later. configure:7345 does a plain `require`, NOT
+# pkg-config -- LAME installs no .pc file.
+LAME_VERSION=3.100
+LAME_URL=https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz,https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download
+LAME_SHA256=ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+
+# libogg is not optional for libvorbis: vorbis's configure takes --with-ogg
+# and vorbis.pc lists ogg in Requires.private.
+# LICENSE: BSD-3-Clause.
+OGG_TAG=v1.3.6
+OGG_COMMIT=be05b13e98b048f0b5a0f5fa8ce514d56db5f822
+OGG_REPO=https://github.com/xiph/ogg.git
+
+# LICENSE: BSD-3-Clause. configure:7455 requires pkg-config vorbis + vorbisenc.
+VORBIS_TAG=v1.3.7
+VORBIS_COMMIT=0657aee69dec8508a0011f47f3b69d7538e9d262
+VORBIS_REPO=https://github.com/xiph/vorbis.git
+
 # ===========================================================================
 # Scaling / colour
 # ===========================================================================
@@ -206,6 +223,72 @@ OPUS_REPO=https://github.com/xiph/opus.git
 ZIMG_TAG=release-3.0.6
 ZIMG_COMMIT=f819b14e8f39d1282400b0d9543e8ef73c1b2bbd
 ZIMG_REPO=https://github.com/sekrit-twc/zimg.git
+
+# ===========================================================================
+# Images -- SAFETY NET
+# ===========================================================================
+# There is no WebP encoder in FFmpeg without libwebp (decode is native, and
+# works today). Nothing in the four consumer repos asks for it; it is here
+# for the same free-text reason as libmp3lame above, and because WebP is a
+# thumbnail format both front-ends already recognise as INPUT
+# (TAS-Standalone src/main/media.ts:19-41, TAS-AdobeEdition
+# MediaBrowserTab.tsx:117-121) while being unable to produce it.
+# libwebpmux is built too: configure gates the libwebp_anim encoder on
+# `libwebpmux >= 0.4.0`, and without it animated WebP silently disappears.
+# LICENSE: BSD-3-Clause.
+WEBP_TAG=v1.6.0
+WEBP_COMMIT=4fa21912338357f89e4fd51cf2368325b59e9bd9
+WEBP_REPO=https://github.com/webmproject/libwebp.git
+
+# ===========================================================================
+# Text rendering -- SAFETY NET (subtitle BURN-IN and drawtext)
+# ===========================================================================
+# READ THIS FIRST, because it is easy to add for the wrong reason:
+# subtitle PASSTHROUGH and subtitle TRANSCODE need NONE of these. mov_text,
+# webvtt, ass, subrip and text are native FFmpeg codecs, which is what
+# TheAnimeScripter uses (-c:s webvtt / -c:s mov_text, src/io/ffmpegSettings
+# .py:848-859) and what nelux uses (AV_CODEC_ID_MOV_TEXT/WEBVTT/ASS/SUBRIP/
+# TEXT, src/Nelux/backends/Encoder.cpp:522-524). Those paths work without a
+# single library below.
+#
+# What these four buy is RENDERING: the `subtitles=` and `ass` filters, which
+# BURN subtitles into the video, and `drawtext`. No consumer calls them today
+# -- they are reachable only through free text (see the LAME note above).
+#
+# Build order is load-bearing: freetype -> harfbuzz -> fribidi -> libass.
+# harfbuzz must be built WITH freetype because libass's shaper includes
+# hb-ft.h; libass then needs all three.
+#
+# fontconfig is DELIBERATELY ABSENT. It would drag in expat and gperf, and --
+# the real reason -- it resolves fonts through a system-wide config file,
+# which a relocatable archive cannot rely on. Consequence, stated plainly:
+# on Linux, `subtitles=` cannot look a font up BY NAME; it works with fonts
+# embedded in the container, with an explicit fontsdir=, and with fontfile=
+# on drawtext. Windows (DirectWrite) and macOS (CoreText) have a native font
+# provider and are unaffected.
+#
+# LICENCE NOTE -- FreeType is dual-licensed FTL or GPL-2.0-or-later. The FTL
+# is GPLv3-compatible but NOT GPLv2-compatible, so we take FreeType under its
+# GPL-2.0-or-later option, which is what keeps these binaries
+# GPL-2.0-or-later rather than forcing GPLv3. scripts/package.sh ships both
+# licence texts from the source tree. The others are permissive:
+# harfbuzz Old-MIT, FriBidi LGPL-2.1-or-later, libass ISC.
+FREETYPE_TAG=VER-2-14-3
+FREETYPE_COMMIT=0a0221a1347e2f1e07c395263540026e9a0aa7c7
+FREETYPE_REPO=https://gitlab.freedesktop.org/freetype/freetype.git
+
+HARFBUZZ_TAG=14.3.0
+HARFBUZZ_COMMIT=4c2aa804671d7276e8a0eb95da07202ead05c843
+HARFBUZZ_REPO=https://github.com/harfbuzz/harfbuzz.git
+
+FRIBIDI_TAG=v1.0.16
+FRIBIDI_COMMIT=68162babff4f39c4e2dc164a5e825af93bda9983
+FRIBIDI_REPO=https://github.com/fribidi/fribidi.git
+
+# configure:7290 requires pkg-config "libass >= 0.11.0".
+LIBASS_TAG=0.17.5
+LIBASS_COMMIT=4a05d8127f525943ebf45fdc6497c9e665947f0d
+LIBASS_REPO=https://github.com/libass/libass.git
 
 # ===========================================================================
 # TLS -- LINUX ONLY (Windows uses Schannel, macOS SecureTransport)

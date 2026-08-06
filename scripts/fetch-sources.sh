@@ -147,13 +147,25 @@ fetch_git "$ZLIB_REPO"    "$ZLIB_COMMIT"    "$SRC_DIR/zlib"             "$ZLIB_T
 # zimg backs the zscale filter, which TAS needs (ffmpegSettings.py:797).
 fetch_git "$ZIMG_REPO"    "$ZIMG_COMMIT"    "$SRC_DIR/zimg"             "$ZIMG_TAG"
 
-# OpenH264 -- last entry of nelux's default-encoder probe
-# (Nelux/src/Nelux/python/VideoEncoder.cpp:46,49,51).
-fetch_git "$OPENH264_REPO" "$OPENH264_COMMIT" "$SRC_DIR/openh264"       "$OPENH264_TAG"
-
 # libvmaf -- backs the `libvmaf` filter that Nelux/tests/test_software_encoders
 # .py:181 hard-requires (it RAISES at :198, it does not skip).
 fetch_git "$VMAF_REPO"    "$VMAF_COMMIT"    "$SRC_DIR/vmaf"             "$VMAF_TAG"
+
+# --- safety-net codecs (see versions.lock; no consumer names these) --------
+# libmp3lame is the only MP3 encoder on Linux and macOS; libvorbis replaces an
+# experimental-gated native encoder; libwebp is the only WebP encoder at all.
+fetch_git "$OGG_REPO"     "$OGG_COMMIT"     "$SRC_DIR/ogg"              "$OGG_TAG"
+fetch_git "$VORBIS_REPO"  "$VORBIS_COMMIT"  "$SRC_DIR/vorbis"           "$VORBIS_TAG"
+fetch_git "$WEBP_REPO"    "$WEBP_COMMIT"    "$SRC_DIR/libwebp"          "$WEBP_TAG"
+
+# --- text rendering: subtitles=/ass burn-in and drawtext -------------------
+# NOT needed for subtitle passthrough or transcode -- those codecs are native.
+# Build order freetype -> harfbuzz -> fribidi -> libass is enforced in
+# scripts/build-deps.sh; the fetch order here is irrelevant.
+fetch_git "$FREETYPE_REPO" "$FREETYPE_COMMIT" "$SRC_DIR/freetype"       "$FREETYPE_TAG"
+fetch_git "$HARFBUZZ_REPO" "$HARFBUZZ_COMMIT" "$SRC_DIR/harfbuzz"       "$HARFBUZZ_TAG"
+fetch_git "$FRIBIDI_REPO"  "$FRIBIDI_COMMIT"  "$SRC_DIR/fribidi"        "$FRIBIDI_TAG"
+fetch_git "$LIBASS_REPO"   "$LIBASS_COMMIT"   "$SRC_DIR/libass"         "$LIBASS_TAG"
 
 # Windows + Linux only, but again: always fetched, for the source archive.
 fetch_git "$LIBVPL_REPO"  "$LIBVPL_COMMIT"  "$SRC_DIR/libvpl"           "$LIBVPL_TAG"
@@ -193,6 +205,12 @@ fetch_tarball "$GNUTLS_URL" "$SRC_DIR/$(dep_tarball GNUTLS)" "$GNUTLS_SHA256"
 fetch_tarball "$BZIP2_URL"    "$SRC_DIR/$(dep_tarball BZIP2)"    "$BZIP2_SHA256"
 fetch_tarball "$XZ_URL"       "$SRC_DIR/$(dep_tarball XZ)"       "$XZ_SHA256"
 fetch_tarball "$LIBICONV_URL" "$SRC_DIR/$(dep_tarball LIBICONV)" "$LIBICONV_SHA256"
+
+# --- LAME (all platforms) --------------------------------------------------
+# Tarball rather than git because LAME has no git upstream: it is CVS on
+# SourceForge. The SHA256 in versions.lock was verified against the
+# downloaded archive.
+fetch_tarball "$LAME_URL"     "$SRC_DIR/$(dep_tarball LAME)"     "$LAME_SHA256"
 
 # --- completeness guard ----------------------------------------------------
 # Everything above is written out by hand so each pin can carry its own

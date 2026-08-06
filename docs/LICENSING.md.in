@@ -47,12 +47,19 @@ and also at `share/tas-ffmpeg/configure-command.txt` inside this one.
 | FFmpeg (libav*, ffmpeg, ffprobe) | LGPL-2.1-or-later, **upgraded to GPL-2.0-or-later** by `--enable-gpl` | `ffmpeg/` |
 | x264 | GPL-2.0 | `x264/` |
 | x265 | GPL-2.0 | `x265/` |
-| OpenH264 | BSD-2-Clause | `openh264/` |
 | dav1d | BSD-2-Clause | `dav1d/` |
 | SVT-AV1 | BSD-3-Clause-Clear + Alliance for Open Media Patent License 1.0 | `svt-av1/` |
 | libaom | BSD-2-Clause + Alliance for Open Media Patent License 1.0 | `aom/` |
 | libvpx | BSD-3-Clause + additional IP rights grant | `libvpx/` |
 | libopus | BSD-3-Clause | `opus/` |
+| LAME (libmp3lame) | LGPL-2.1-or-later | `lame/` |
+| libogg | BSD-3-Clause | `ogg/` |
+| libvorbis | BSD-3-Clause | `vorbis/` |
+| libwebp | BSD-3-Clause | `libwebp/` |
+| FreeType | dual FreeType Licence (FTL) **or** GPL-2.0-or-later — we take **GPL-2.0-or-later**, because the FTL is GPLv3-compatible but not GPLv2-compatible | `freetype/` |
+| HarfBuzz | MIT (Old MIT) | `harfbuzz/` |
+| FriBidi | LGPL-2.1-or-later | `fribidi/` |
+| libass | ISC | `libass/` |
 | zimg | WTFPL | `zimg/` |
 | zlib | zlib licence | `zlib/` |
 | libvmaf | BSD-2-Clause-Patent | `vmaf/` |
@@ -100,11 +107,17 @@ option. FFmpeg disagrees: `configure:7382-7383` ends `--enable-libtls` with
 `die "ERROR: LibreSSL is incompatible with the gpl"`. GnuTLS is the only
 backend FFmpeg 8.1.2 will accept in a GPL build on Linux.
 
-**On OpenH264 and patents.** Cisco's well-known royalty coverage for H.264
-applies to *Cisco's own prebuilt binary releases* of OpenH264, not to
-third-party builds. These binaries are built from source, so that coverage
-does not apply. That is the same patent position already created by x264 and
-x265, and it is unchanged by OpenH264's presence.
+**On FreeType's dual licence.** FreeType is offered under either the FreeType
+Licence (FTL) or GPL-2.0-or-later. The FTL is GPLv3-compatible but *not*
+GPLv2-compatible, so taking FreeType under the FTL inside a GPL-2.0-or-later
+work would be a conflict. We take it under its GPL-2.0-or-later option, which
+is why these binaries remain GPL-2.0-or-later and are not pushed to GPLv3.
+Both licence texts ship in `freetype/`.
+
+**On subtitle rendering.** libass, FreeType, HarfBuzz and FriBidi are present
+so that subtitles can be BURNED IN (`subtitles=`, `ass`) and so `drawtext`
+works. Subtitle passthrough and transcoding — `mov_text`, `webvtt`, `ass`,
+`subrip`, `text` — are native FFmpeg codecs and involve none of them.
 
 ## Note on system components
 

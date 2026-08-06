@@ -351,25 +351,6 @@
 # the BT.2020 path is still reachable.)
 --enable-libzimg                              # TAS
 
-# libopenh264 -- KEPT ON THE UNION RULE ONLY. Its original justification is
-# gone: it was the last-resort entry of nelux's default-encoder probe, and
-# that probe no longer exists (see the DEFAULT ENCODER note above). As of
-# nelux b4a57fd there are ZERO references to openh264 in any of the four
-# consumer repos.
-#
-# It stays because it is a plausible `--custom_encoder` / `codec=` string for
-# an H.264 encoder, and because the file's standing rule is over-inclusion.
-# It is, however, the one dependency here that nothing measurable needs: drop
-# --enable-libopenh264, its OPENH264_* pin in versions.lock, build_openh264 in
-# scripts/build-deps.sh and the `encoder libopenh264` line in
-# flags/required-components.txt together, and the build loses a pinned source,
-# a compile step and ~1 MB. BSD-2-Clause, so no licence interaction with
-# --enable-gpl.
-# NOTE: we build OpenH264 from source, so Cisco's H.264 royalty coverage --
-# which applies only to Cisco's own prebuilt binaries -- does NOT apply.
-# That is the same patent position we already have from libx264/libx265.
---enable-libopenh264                          # nelux
-
 # libvmaf backs the `libvmaf` FILTER, and this is a hard test requirement,
 # not a nice-to-have. Nelux/tests/test_software_encoders.py is a real pytest
 # module (parametrised test_software_encoder_pixfmt at :226) whose quality
@@ -386,23 +367,88 @@
 # passes -Denable_float=true explicitly rather than relying on the default.
 --enable-libvmaf                              # nelux
 
-# MP3 ENCODING: deliberately NOT provided, and this is now a decision rather
-# than a gap. Both claims were checked against the consumers' source:
-#   * nelux -- AV_CODEC_ID_MP3 at Encoder.cpp:399 is the 4th entry of a
-#     PROBE list (Encoder.cpp:398-400) inside setupAudioTranscode. Every
-#     candidate is gated on `avformat_query_codec(...) && avcodec_find_
-#     encoder(c)` at :404-405, native AV_CODEC_ID_AAC is first, and the whole
-#     list is only consulted when av_guess_codec() came back empty
-#     (Encoder.cpp:396). For the five containers inferContainerFormat() can
-#     produce (Encoder.cpp:1509-1524) av_guess_codec never comes back empty,
-#     and AAC/Opus/Vorbis encoders are all present regardless. The MP3 entry
-#     degrades cleanly when no MP3 encoder exists.
-#   * TAS -- zero references to mp3/libmp3lame/wav/flac/m4a anywhere under
-#     Theanimescripter/src. The only `-c:a` line in the whole repo is
-#     ffmpegSettings.py:860, fed by :846-859 with exactly
-#     {copy, libopus, aac}.
-# MP3 *decoding* works (native decoder, always on) -- which is what the
-# metadata corpus (Nelux/tests/data/metadata_corpus/D/*mp3*.mp4) exercises.
-# If a --custom_encoder user ever needs `-c:a libmp3lame`, pin LAME 3.100
-# (SHA256 ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e,
-# verified 2026-08-04) and add one line here.
+# ===========================================================================
+# 7. Safety net -- reachable through free text, named by no consumer
+# ===========================================================================
+# Everything above is here because a consumer's SOURCE names it. Everything
+# below is here because a consumer's USER can name it, and would otherwise get
+# "Unknown encoder" from a build that had no technical reason to lack it.
+#
+# The free-text surface is real and unvalidated:
+#   TAS-Standalone   src/shared/schema.ts:462 (a plain text control)
+#                 -> src/shared/buildArgs.ts:102-107
+#                 -> Theanimescripter/src/io/ffmpegSettings.py:825 (a bare
+#                    whitespace split, spliced into argv at :744, REPLACING
+#                    matchEncoder()'s output entirely)
+#   nelux            VideoEncoder(codec=...) is passed straight to
+#                    avcodec_find_encoder_by_name (Encoder.cpp:853,892) with
+#                    no allowlist; the ComfyUI node pack forwards unknown
+#                    strings verbatim (examples/comfyui_nelux_nodes/
+#                    __init__.py:646).
+#
+# Two of these three close a REAL HOLE rather than adding a nicety, which is
+# why they are in and the rest of the popular-encoder list still is not:
+
+# Without libmp3lame there is NO MP3 ENCODER on Linux or macOS. Windows alone
+# has `mp3_mf` via MediaFoundation -- a silent platform asymmetry, which is
+# the class of bug this repo exists to remove. Encoding is the gap; MP3
+# DECODING has always worked (native decoder) and is what the nelux metadata
+# corpus exercises.
+# LAME also changes what av_guess_codec() hands back for matroska (mp3 rather
+# than ac3), which nelux consults at Encoder.cpp:390 on the audio passthrough
+# path.
+--enable-libmp3lame                           # safety net
+
+# FFmpeg's NATIVE `vorbis` encoder is experimental and refuses to open:
+#     The encoder 'vorbis' is experimental but experimental codecs are not
+#     enabled, add '-strict -2' if you want to use it.
+# So "the encoder exists" was never the same as "a user can encode Vorbis".
+# libvorbis is also the 3rd entry in nelux's audio fallback chain
+# (AV_CODEC_ID_VORBIS, Encoder.cpp:396) -- guarded, so it degraded cleanly,
+# but it degraded.
+--enable-libvorbis                            # safety net
+# libvorbis needs libogg; both are pinned in versions.lock.
+
+# There is NO WebP encoder in FFmpeg without libwebp. Decoding is native and
+# already worked, which makes the gap easy to miss: both front-ends accept
+# .webp as INPUT (TAS-Standalone src/main/media.ts:19-41, TAS-AdobeEdition
+# MediaBrowserTab.tsx:117-121) while being unable to produce it.
+--enable-libwebp                              # safety net
+
+# --- text rendering ---------------------------------------------------------
+# *** THIS IS NOT WHAT MAKES SUBTITLES WORK. ***
+# Subtitle PASSTHROUGH and TRANSCODE are native and always were: mov_text,
+# webvtt, ass, subrip and text are built-in FFmpeg codecs. That is what TAS
+# emits (-c:s webvtt / -c:s mov_text, ffmpegSettings.py:848-859) and what
+# nelux emits (Encoder.cpp:522-524). None of the four libraries below is
+# involved in any of it.
+#
+# What they buy is RENDERING -- burning subtitles INTO the video with the
+# `subtitles=` / `ass` filters, and `drawtext` for captions and watermarks.
+# Those are the most commonly reached-for FFmpeg filters that this build did
+# not have.
+#
+# fontconfig is deliberately NOT included; see versions.lock for the whole
+# argument. Short version: it resolves fonts through a system-wide config
+# file, which a relocatable archive cannot depend on. On Linux that means
+# `subtitles=` cannot look a font up BY NAME -- embedded/attached fonts,
+# fontsdir= and drawtext's fontfile= all still work. Windows (DirectWrite)
+# and macOS (CoreText) have a native font provider and are unaffected.
+#
+# LICENCE: FreeType is dual-licensed FTL or GPL-2.0-or-later. The FTL is
+# GPLv3-compatible but NOT GPLv2-compatible, so we take FreeType under its
+# GPL-2.0-or-later option -- which is exactly why these binaries stay
+# GPL-2.0-or-later instead of being forced to GPLv3. harfbuzz is Old-MIT,
+# FriBidi LGPL-2.1-or-later, libass ISC. None of them is in configure's
+# EXTERNAL_LIBRARY_VERSION3_LIST, so none forces --enable-version3.
+--enable-libass                               # safety net
+--enable-libfreetype                          # safety net -- drawtext, and libass's rasteriser
+--enable-libfribidi                           # safety net -- bidi text in libass
+--enable-libharfbuzz                          # safety net -- shaping in libass
+
+# NOT added, and each for a reason rather than by omission: libfdk-aac (would
+# make the binary undistributable), librav1e / libxvid / libtheora /
+# libopenjpeg / libjxl (superseded by encoders already here, or vanishingly
+# rare as an OUTPUT), libplacebo + vulkan (~100 MB and a runtime driver
+# dependency), fontconfig (see above), libsoxr (nothing resamples audio --
+# every consumer path is -c:a copy or a straight transcode).

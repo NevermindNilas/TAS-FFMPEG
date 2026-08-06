@@ -732,33 +732,178 @@ build_opus() {
 }
 
 # ===========================================================================
-# OpenH264 -- the last entry in nelux's default-encoder probe
-# (Nelux/src/Nelux/python/VideoEncoder.cpp:46,49,51).
+# SAFETY-NET CODECS -- libmp3lame, libogg + libvorbis, libwebp
 #
-# Built with MESON, not the upstream Makefile: FFmpeg's configure:7343 wants
-# `pkg-config openh264 >= 1.3.0`, and openh264's meson.build:213 imports the
-# pkgconfig module and generates openh264.pc with the project version. The
-# hand-written Makefile's install-static target does emit a .pc too, but the
-# meson path also gives us a normal static/PIC build on all three OSes with
-# no per-OS ARCH=/OS= variables to get wrong. meson+ninja are already
-# required by dav1d, so this adds no build tooling.
+# No consumer names any of these. They are here because TAS-Standalone's
+# `custom_encoder` is an unvalidated free-text field (src/shared/schema.ts:462
+# -> buildArgs.ts:102-107 -> the backend's ffmpegSettings.py:825), and because
+# two of the three close a real hole rather than adding a nicety:
+#   * without libmp3lame there is NO MP3 encoder on Linux or macOS. Windows
+#     has mp3_mf from MediaFoundation, so this was a platform asymmetry of
+#     exactly the kind this repo exists to remove;
+#   * FFmpeg's native `vorbis` encoder refuses to open without `-strict -2`;
+#   * there is no WebP encoder in FFmpeg at all without libwebp (decode is
+#     native and already worked).
 # ===========================================================================
-build_openh264() {
-  have_stamp openh264 "$OPENH264_COMMIT" && { log "openh264 up to date"; return; }
-  log "building openh264 $OPENH264_TAG"
-  rm -rf "$WORK_DIR/openh264"
-  meson setup "$WORK_DIR/openh264" "$SRC_DIR/openh264" \
+build_lame() {
+  have_stamp lame "$LAME_SHA256" && { log "LAME up to date"; return; }
+  log "building LAME $LAME_VERSION"
+  rm -rf "$WORK_DIR/lame"; mkdir -p "$WORK_DIR/lame"
+  tar -xf "$SRC_DIR/$(dep_tarball LAME)" -C "$WORK_DIR/lame" --strip-components=1
+  ( cd "$WORK_DIR/lame"
+    # lame 3.100's libmp3lame.sym still lists lame_init_old, which the library
+    # no longer defines. Any linker that resolves the export list eagerly dies
+    # on it. Deleting the line is what every distro package does.
+    sed -i '/lame_init_old/d' include/libmp3lame.sym
+    # config.guess/config.sub in the 3.100 tarball predate arm64 Macs and
+    # abort with "cannot guess build type" there. Refresh them from the local
+    # automake where there is one; harmless everywhere else.
+    _amdir="$(automake --print-libdir 2>/dev/null || true)"
+    if [ -n "$_amdir" ]; then
+      for _f in config.guess config.sub; do
+        [ -f "$_amdir/$_f" ] && cp -f "$_amdir/$_f" "./$_f"
+      done
+    fi
+    ./configure --prefix="$PREFIX_DIR" --enable-static --disable-shared \
+      --disable-frontend --disable-gtktest --with-pic
+    make -j"$JOBS" && make install )
+  # LAME ships no .pc file: configure does a plain `require libmp3lame
+  # lame/lame.h lame_set_VBR_quality -lmp3lame`, so what makes this resolve is
+  # the -I/-L for $PREFIX_DIR that build-ffmpeg.sh already passes.
+  set_stamp lame "$LAME_SHA256"
+}
+
+build_ogg() {
+  have_stamp ogg "$OGG_COMMIT" && { log "libogg up to date"; return; }
+  log "building libogg $OGG_TAG"
+  rm -rf "$WORK_DIR/ogg"
+  cmake -S "$SRC_DIR/ogg" -B "$WORK_DIR/ogg" -G Ninja \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX_DIR" -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF -DINSTALL_DOCS=OFF -DBUILD_TESTING=OFF \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+  cmake --build "$WORK_DIR/ogg" -j "$JOBS"
+  cmake --install "$WORK_DIR/ogg"
+  set_stamp ogg "$OGG_COMMIT"
+}
+
+build_vorbis() {
+  have_stamp vorbis "$VORBIS_COMMIT" && { log "libvorbis up to date"; return; }
+  log "building libvorbis $VORBIS_TAG"
+  rm -rf "$WORK_DIR/vorbis"
+  # vorbis must see OUR static libogg, not a system one: vorbis.pc lists ogg
+  # in Requires.private and configure checks vorbis + vorbisenc by pkg-config.
+  cmake -S "$SRC_DIR/vorbis" -B "$WORK_DIR/vorbis" -G Ninja \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX_DIR" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH="$PREFIX_DIR" \
+    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+  cmake --build "$WORK_DIR/vorbis" -j "$JOBS"
+  cmake --install "$WORK_DIR/vorbis"
+  set_stamp vorbis "$VORBIS_COMMIT"
+}
+
+build_webp() {
+  have_stamp webp "$WEBP_COMMIT" && { log "libwebp up to date"; return; }
+  log "building libwebp $WEBP_TAG"
+  rm -rf "$WORK_DIR/libwebp"
+  # WEBP_BUILD_LIBWEBPMUX is not cosmetic: configure gates the libwebp_anim
+  # encoder on `libwebpmux >= 0.4.0`, and without it animated WebP vanishes
+  # with no error anywhere.
+  cmake -S "$SRC_DIR/libwebp" -B "$WORK_DIR/libwebp" -G Ninja \
+    -DCMAKE_INSTALL_PREFIX="$PREFIX_DIR" -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DWEBP_BUILD_LIBWEBPMUX=ON -DWEBP_BUILD_ANIM_UTILS=OFF \
+    -DWEBP_BUILD_CWEBP=OFF -DWEBP_BUILD_DWEBP=OFF -DWEBP_BUILD_GIF2WEBP=OFF \
+    -DWEBP_BUILD_IMG2WEBP=OFF -DWEBP_BUILD_VWEBP=OFF -DWEBP_BUILD_WEBPINFO=OFF \
+    -DWEBP_BUILD_WEBPMUX=OFF -DWEBP_BUILD_EXTRAS=OFF
+  cmake --build "$WORK_DIR/libwebp" -j "$JOBS"
+  cmake --install "$WORK_DIR/libwebp"
+  set_stamp webp "$WEBP_COMMIT"
+}
+
+# ===========================================================================
+# TEXT RENDERING -- freetype -> harfbuzz -> fribidi -> libass
+#
+# This chain is for subtitle BURN-IN (`subtitles=`, `ass`) and for `drawtext`.
+# Subtitle passthrough and transcode need NONE of it: mov_text, webvtt, ass,
+# subrip and text are native FFmpeg codecs, and those are the paths both
+# consumers actually use.
+#
+# ORDER IS LOAD-BEARING, and not for the obvious reason. harfbuzz must be
+# built WITH freetype support because libass's shaper includes hb-ft.h
+# (libass/ass_shaper.c); a harfbuzz configured -Dfreetype=disabled builds
+# cleanly and then fails libass's configure. So freetype comes first, even
+# though freetype can optionally consume harfbuzz in the other direction. The
+# usual two-pass freetype rebuild is deliberately skipped: harfbuzz-in-
+# freetype only improves auto-hinting for complex scripts.
+# ===========================================================================
+build_freetype() {
+  have_stamp freetype "$FREETYPE_COMMIT" && { log "freetype up to date"; return; }
+  log "building freetype $FREETYPE_TAG"
+  rm -rf "$WORK_DIR/freetype"
+  # Every optional dependency is off on purpose: brotli/png/bzip2 matter only
+  # for font formats no subtitle renderer uses, and each is another pin.
+  meson setup "$WORK_DIR/freetype" "$SRC_DIR/freetype" \
     --prefix="$PREFIX_DIR" --libdir=lib --buildtype=release \
-    --default-library=static -Dtests=disabled
-  ninja -C "$WORK_DIR/openh264" -j "$JOBS"
-  ninja -C "$WORK_DIR/openh264" install
-  # openh264 is C++, but meson's pkgconfig module does not add a C++ runtime
-  # to Libs.private for a static library -- so the .pc it generates cannot
-  # satisfy configure:7343's require_pkg_config link test (undefined
-  # operator new / __cxa_*) on ANY platform. Note this is checked BEFORE x265
-  # (:7432), so it is the first thing that would die.
-  pc_fix_cxx "$PREFIX_DIR/lib/pkgconfig/openh264.pc"
-  set_stamp openh264 "$OPENH264_COMMIT"
+    --default-library=static \
+    -Dbrotli=disabled -Dbzip2=disabled -Dpng=disabled -Dharfbuzz=disabled \
+    -Dzlib=disabled
+  ninja -C "$WORK_DIR/freetype" -j "$JOBS"
+  ninja -C "$WORK_DIR/freetype" install
+  set_stamp freetype "$FREETYPE_COMMIT"
+}
+
+build_harfbuzz() {
+  have_stamp harfbuzz "$HARFBUZZ_COMMIT" && { log "harfbuzz up to date"; return; }
+  log "building harfbuzz $HARFBUZZ_TAG"
+  rm -rf "$WORK_DIR/harfbuzz"
+  meson setup "$WORK_DIR/harfbuzz" "$SRC_DIR/harfbuzz" \
+    --prefix="$PREFIX_DIR" --libdir=lib --buildtype=release \
+    --default-library=static \
+    -Dfreetype=enabled -Dglib=disabled -Dgobject=disabled -Dcairo=disabled \
+    -Dicu=disabled -Dtests=disabled -Ddocs=disabled -Dutilities=disabled \
+    -Dbenchmark=disabled
+  ninja -C "$WORK_DIR/harfbuzz" -j "$JOBS"
+  ninja -C "$WORK_DIR/harfbuzz" install
+  # harfbuzz is C++ and meson's pkgconfig module emits no C++ runtime in
+  # Libs.private for a static library -- the same trap zimg and openh264 hit.
+  # libass's configure link-tests harfbuzz through pkg-config, so this is not
+  # optional.
+  pc_fix_cxx "$PREFIX_DIR/lib/pkgconfig/harfbuzz.pc"
+  set_stamp harfbuzz "$HARFBUZZ_COMMIT"
+}
+
+build_fribidi() {
+  have_stamp fribidi "$FRIBIDI_COMMIT" && { log "fribidi up to date"; return; }
+  log "building fribidi $FRIBIDI_TAG"
+  rm -rf "$WORK_DIR/fribidi"
+  meson setup "$WORK_DIR/fribidi" "$SRC_DIR/fribidi" \
+    --prefix="$PREFIX_DIR" --libdir=lib --buildtype=release \
+    --default-library=static -Ddocs=false -Dbin=false -Dtests=false
+  ninja -C "$WORK_DIR/fribidi" -j "$JOBS"
+  ninja -C "$WORK_DIR/fribidi" install
+  set_stamp fribidi "$FRIBIDI_COMMIT"
+}
+
+build_libass() {
+  have_stamp libass "$LIBASS_COMMIT" && { log "libass up to date"; return; }
+  log "building libass $LIBASS_TAG"
+  rm -rf "$WORK_DIR/libass"; cp -r "$SRC_DIR/libass" "$WORK_DIR/libass"
+  ( cd "$WORK_DIR/libass"
+    # Same glibtoolize dance as build_zimg -- see the long note there.
+    if [ "$OS" = "macos" ] && command -v glibtoolize >/dev/null 2>&1; then
+      export LIBTOOLIZE=glibtoolize
+    fi
+    ./autogen.sh
+    # --disable-fontconfig: see versions.lock for why fontconfig is not here.
+    # On a platform with no NATIVE font provider -- that is Linux; Windows has
+    # DirectWrite and macOS CoreText, both of which libass detects itself --
+    # configure then REFUSES to continue unless the refusal is waived.
+    _ass_flags="--prefix=$PREFIX_DIR --enable-static --disable-shared --with-pic --disable-fontconfig"
+    [ "$OS" = linux ] && _ass_flags="$_ass_flags --disable-require-system-font-provider"
+    # shellcheck disable=SC2086
+    ./configure $_ass_flags
+    make -j"$JOBS" && make install )
+  set_stamp libass "$LIBASS_COMMIT"
 }
 
 # ===========================================================================
@@ -966,12 +1111,19 @@ build_libdrm
 build_libva
 build_x264
 build_x265
-build_openh264
 build_dav1d
 build_svtav1
 build_aom
 build_vpx
 build_opus
+build_lame
+build_ogg
+build_vorbis
+build_webp
+build_freetype
+build_harfbuzz
+build_fribidi
+build_libass
 build_zimg
 build_vmaf
 build_gnutls
