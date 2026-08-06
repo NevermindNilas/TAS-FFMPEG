@@ -363,6 +363,21 @@ fetch_git() {
   mkdir -p "$(dirname "$dest")"
   log "cloning $repo @ ${tag:-$commit}"
   git init -q "$dest"
+  # WINDOWS: without this, harfbuzz does not check out.
+  #
+  # Git on Windows refuses to create a path longer than MAX_PATH (260) unless
+  # core.longpaths is set, and harfbuzz ships subsetting test fixtures whose
+  # names alone run past 200 characters, e.g.
+  #   test/subset/data/expected/avar2_full_instance/RobotoDelta-Roman-VF-\
+  #   subset.default.all.opsz=70,wght=600,wdth=120,...,XTSP=50.ttf
+  # The checkout then fails with "unable to create file ... Filename too
+  # long". Reproduced locally against the pinned harfbuzz commit before it
+  # could cost a CI round.
+  #
+  # actions/checkout sets this for the repo it clones, but fetch_git does its
+  # own `git init`, so that setting does not reach these trees. It is a no-op
+  # on Linux and macOS, where the limit does not exist.
+  git -C "$dest" config core.longpaths true
   git -C "$dest" remote add origin "$repo"
   # Try a shallow fetch of the exact object first (works on GitHub/GitLab);
   # fall back to a full fetch for servers with uploadpack.allowReachableSHA1
