@@ -754,7 +754,16 @@ build_lame() {
     # lame 3.100's libmp3lame.sym still lists lame_init_old, which the library
     # no longer defines. Any linker that resolves the export list eagerly dies
     # on it. Deleting the line is what every distro package does.
-    sed -i '/lame_init_old/d' include/libmp3lame.sym
+    #
+    # NOT `sed -i`. BSD sed -- which is what macOS ships -- requires an
+    # explicit backup suffix as the argument to -i, so `sed -i '/x/d' file`
+    # there consumes the SCRIPT as the suffix and then tries to run the
+    # FILENAME as the script:
+    #     sed: 1: "include/libmp3lame.sym": command i expects \ followed by text
+    # Both macOS legs died on that while Windows and Linux passed. grep into a
+    # temporary file behaves identically everywhere.
+    grep -v 'lame_init_old' include/libmp3lame.sym > libmp3lame.sym.tmp
+    mv libmp3lame.sym.tmp include/libmp3lame.sym
     # config.guess/config.sub in the 3.100 tarball predate arm64 Macs and
     # abort with "cannot guess build type" there. Refresh them from the local
     # automake where there is one; harmless everywhere else.
