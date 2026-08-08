@@ -792,9 +792,17 @@ build_vorbis() {
   rm -rf "$WORK_DIR/vorbis"
   # vorbis must see OUR static libogg, not a system one: vorbis.pc lists ogg
   # in Requires.private and configure checks vorbis + vorbisenc by pkg-config.
+  #
+  # CMAKE_POLICY_VERSION_MINIMUM is not optional here. libvorbis 1.3.7 is from
+  # 2020 and opens with `cmake_minimum_required(VERSION 2.8)`; CMake 4 removed
+  # compatibility with anything below 3.5 and refuses to configure:
+  #     Compatibility with CMake < 3.5 has been removed from CMake.
+  # 1.3.7 is still the newest libvorbis RELEASE, so there is no newer tag to
+  # move to -- upstream has only fixed this on master. Setting the policy
+  # floor is the escape hatch CMake itself names in that error.
   cmake -S "$SRC_DIR/vorbis" -B "$WORK_DIR/vorbis" -G Ninja \
     -DCMAKE_INSTALL_PREFIX="$PREFIX_DIR" -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH="$PREFIX_DIR" \
+    -DCMAKE_PREFIX_PATH="$PREFIX_DIR" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
   cmake --build "$WORK_DIR/vorbis" -j "$JOBS"
   cmake --install "$WORK_DIR/vorbis"
