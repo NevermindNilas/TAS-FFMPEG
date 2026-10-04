@@ -325,11 +325,14 @@ GMP_VERSION=6.3.0
 # ftp.gnu.org FIRST: gmplib.org was unreachable from every GitHub runner on
 # the first full CI run and took out three build legs at once. The GNU
 # mirror was verified to serve a byte-identical tarball (same SHA256).
-GMP_URL=https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz,https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
+# mirrors.kernel.org added 2026-10-04 after ftp.gnu.org AND gmplib.org both
+# timed out from a macOS runner (run 37194952841). Same bytes: hashed, matches.
+GMP_URL=https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz,https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz,https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz
 GMP_SHA256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
 
 NETTLE_VERSION=3.10.2
-NETTLE_URL=https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz
+# Second mirror for the same reason as GMP above; hashed, matches.
+NETTLE_URL=https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz,https://mirrors.kernel.org/gnu/nettle/nettle-3.10.2.tar.gz
 NETTLE_SHA256=fe9ff51cb1f2abb5e65a6b8c10a92da0ab5ab6eaf26e7fc2b675c45f1fb519b5
 
 # configure:7317 has no version floor; 3.8.x is the current stable series.
