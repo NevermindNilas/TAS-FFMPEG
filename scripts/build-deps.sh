@@ -401,8 +401,37 @@ build_libvpl() {
   [ "$OS" = "linux" ] && [ "$ARCH" = "arm64" ] && { log "skipping libvpl (no aarch64 oneVPL runtime)"; return; }
   have_stamp libvpl "$LIBVPL_COMMIT" && { log "libvpl up to date"; return; }
   log "building libvpl $LIBVPL_TAG (dispatcher)"
-  rm -rf "$WORK_DIR/libvpl"
-  cmake -S "$SRC_DIR/libvpl" -B "$WORK_DIR/libvpl" -G Ninja \
+  rm -rf "$WORK_DIR/libvpl" "$WORK_DIR/libvpl-src"
+  local vpl_src="$SRC_DIR/libvpl"
+  # *** WINDOWS: libvpl does not compile against current mingw-w64 headers. ***
+  # libvpl/src/windows/mfx_dispatcher_defs.h:20 guards an MSVC-2005 fallback
+  # with `#if _MSC_VER < 1400`. mingw does not define _MSC_VER, so that reads
+  # as `0 < 1400` -- TRUE -- and libvpl #defines wcscpy_s as TWO statements.
+  # Harmless until mingw-w64 commit 9dff64a5 made stralign.h:208 call
+  # wcscpy_s inside an expression; now windows.h itself fails to compile
+  # ("expected ')' before ';' token"). setup-msys2 installs current packages,
+  # so this broke with no change on our side (run 37194952841, 2026-10-04).
+  # Still present in libvpl v2.17.0, the newest tag; upstream is
+  # intel/libvpl#198 (open). Bumping does not help, so: patch.
+  #
+  # The fix is the guard upstream meant: `defined(_MSC_VER) && ...`. It is
+  # applied to a COPY, never to $SRC_DIR -- that tree is the verified pin and
+  # corresponding-source.sh archives it with `git archive HEAD`, which would
+  # silently drop a working-tree edit. The modification is instead recorded
+  # by THIS script, which ships in that same archive (build/scripts/). Drop
+  # this block once a libvpl release fixes the guard.
+  if [ "$OS" = "windows" ]; then
+    vpl_src="$WORK_DIR/libvpl-src"
+    cp -r "$SRC_DIR/libvpl" "$vpl_src"
+    local defs="$vpl_src/libvpl/src/windows/mfx_dispatcher_defs.h"
+    # No `$` anchors: the checkout may be CRLF (git autocrlf on Windows), and
+    # a trailing  must neither stop the match nor be eaten by it.
+    sed -i.bak -e 's/^#if _MSC_VER < 1400/#if defined(_MSC_VER) \&\& _MSC_VER < 1400/' "$defs"
+    rm -f "$defs.bak"
+    grep -q '^#if defined(_MSC_VER) && _MSC_VER < 1400' "$defs" \
+      || die "libvpl mingw patch did not apply to $defs -- the guard has changed upstream. Check whether intel/libvpl#198 is fixed in $LIBVPL_TAG and drop or adjust this block."
+  fi
+  cmake -S "$vpl_src" -B "$WORK_DIR/libvpl" -G Ninja \
     -DCMAKE_INSTALL_PREFIX="$PREFIX_DIR" -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF \
     -DBUILD_TOOLS=OFF -DINSTALL_EXAMPLE_CODE=OFF
