@@ -199,7 +199,7 @@ fi
 # 3. av_version_info() == "<version>-tas"
 #
 # --extra-version=tas (build-ffmpeg.sh) makes FFMPEG_VERSION "<version>-tas"
-# via ffbuild/version.sh:40,48. No distro, gyan or BtbN build can produce that
+# via ffbuild/version.sh:41,48. No distro, gyan or BtbN build can produce that
 # string, which is precisely why both consumers are told to assert it at
 # startup. If it regresses, that assertion silently starts passing on somebody
 # else's FFmpeg.
@@ -266,7 +266,7 @@ if [ "$RUNNABLE" -eq 1 ]; then
       bad "the binary reports a NONFREE licence -- it cannot be distributed at all. Something enabled --enable-nonfree." ;;
     *"GNU General Public License"*)
       case "$lic" in
-        *"version 3"*) bad "licence is GPL v3. --enable-version3 must not be set (flags/ffmpeg.flags); it would relicense the whole binary via configure:4773 and break combination with GPLv2-only code." ;;
+        *"version 3"*) bad "licence is GPL v3. --enable-version3 must not be set (flags/ffmpeg.flags); it would relicense the whole binary via configure:4836 and break combination with GPLv2-only code." ;;
         *) ok "licence is GPL v2 or later" ;;
       esac ;;
     *"Lesser General Public License"*)
@@ -286,11 +286,11 @@ if [ -f "$CFG" ]; then
 
   # --- compression + charset backends -------------------------------------
   # zlib/bzlib/lzma/iconv are all in configure's
-  # EXTERNAL_AUTODETECT_LIBRARY_LIST (configure:1966-1985), so
+  # EXTERNAL_AUTODETECT_LIBRARY_LIST (configure:2007-2026), so
   # --disable-autodetect turns every one of them OFF and flags/ffmpeg.flags
   # has to name them explicitly (:176-186).
   #
-  # ffmpeg-8.1.2 configure:8285-8287 does `requested $lib && ! enabled $lib &&
+  # ffmpeg-9.0.2 configure:8359-8361 does `requested $lib && ! enabled $lib &&
   # die`, so a MISSING backend is a hard configure failure rather than a
   # silent feature drop -- but the flags could still be edited away, and on
   # Windows these are supplied by libraries we now build from pinned source
@@ -425,6 +425,54 @@ else
 fi
 
 # ===========================================================================
+# 6b. Vulkan (Windows + Linux -- scripts/lib/common.sh vulkan_target)
+#
+# --enable-vulkan can come out short in three SILENT ways, and each needs its
+# own proof. (A fourth, the shader compiler, is the canary pair in
+# flags/required-components.txt: `spirv_compiler` is in no list configure
+# prints, so config.h cannot speak for it -- only scale_vulkan/ffv1_vulkan
+# being present can.)
+#   CONFIG_VULKAN_1_4            headers older than 1.4.317 still pass the
+#                                1.3.277 floor, and just lose vp9_vulkan.
+#   HAVE_SPIRV_UNIFIED1_SPIRV_H  SPIRV-Headers missing is only a configure
+#                                WARNING, and swscale loses its Vulkan backend.
+#                                (`spirv/unified1/spirv.h` is the layout
+#                                build_spirv_headers installs; the HAVE_ prefix
+#                                is because it is a HEADERS_LIST entry, which
+#                                feeds HAVE_LIST -- not CONFIG_.)
+#   the loader name in avutil    the DLL/DT_NEEDED allowlists in 7-9 already
+#                                forbid LINKING the loader. This is the other
+#                                half: hwcontext_vulkan.c's dlopen table is
+#                                compiled in, so Vulkan is reached at runtime.
+# ===========================================================================
+if vulkan_target "$OS"; then
+  if [ -f "$CFG" ]; then
+    for c in CONFIG_VULKAN CONFIG_VULKAN_1_4 HAVE_SPIRV_UNIFIED1_SPIRV_H; do
+      grep -qE "^#define $c 1\$" "$CFG" \
+        || bad "config.h: $c is not 1 (flags/ffmpeg.$OS.flags asks for --enable-vulkan). See the 6b block in scripts/verify-output.sh for what each one costs, and versions.lock VULKAN_HEADERS_* / SPIRV_HEADERS_* for the pins."
+    done
+  fi
+  if [ "$RUNNABLE" -eq 1 ]; then
+    if "$FFMPEG" -hide_banner -hwaccels 2>/dev/null | grep -qx 'vulkan'; then
+      ok "ffmpeg -hwaccels lists vulkan"
+    else
+      bad "ffmpeg -hwaccels does not list vulkan, although --enable-vulkan was requested"
+    fi
+  fi
+  case "$OS" in
+    windows) AVUTIL_BIN="$INSTALL/bin/avutil-$SONAME_AVUTIL.dll"; VK_LOADER="vulkan-1.dll" ;;
+    *)       AVUTIL_BIN="$INSTALL/lib/libavutil.so.$SONAME_AVUTIL"; VK_LOADER="libvulkan.so.1" ;;
+  esac
+  if [ ! -f "$AVUTIL_BIN" ]; then
+    bad "no $(basename "$AVUTIL_BIN") to check the Vulkan loader against"
+  elif LC_ALL=C grep -a -q -F "$VK_LOADER" "$AVUTIL_BIN"; then
+    ok "Vulkan is compiled in and reaches the loader by dlopen ($VK_LOADER), not by linking"
+  else
+    bad "$(basename "$AVUTIL_BIN") does not contain the string '$VK_LOADER' -- hwcontext_vulkan is not in this build"
+  fi
+fi
+
+# ===========================================================================
 # 7-9. dependency closure
 #
 # One rule, three spellings: the shipped binaries may import ONLY the seven
@@ -470,7 +518,7 @@ if [ "$OS" = "linux" ]; then
   #
   # scripts/build-ffmpeg.sh asks configure for
   #     -Wl,-rpath,'$$ORIGIN:$$ORIGIN/../lib'
-  # configure:4624 copies that verbatim into ffbuild/config.mak; make turns
+  # configure:4685 copies that verbatim into ffbuild/config.mak; make turns
   # `$$` into `$`; /bin/sh then runs the link recipe. Without the single
   # quotes, sh expands the (unset) shell variable $ORIGIN to nothing and the
   # recorded runpath becomes `:/../lib` -- a silently WRONG value that the
@@ -628,10 +676,10 @@ docker/Dockerfile.manylinux_2_28. Refusing to call this build verified."
   if [ "$ARCH" = "x86_64" ]; then
     if [ -f "$CFG" ]; then
       # NOTE the two different PREFIXES, which are not interchangeable and
-      # cost a CI round when they were assumed to be. In ffmpeg-8.1.2's
+      # cost a CI round when they were assumed to be. In ffmpeg-9.0.2's
       # configure, `vaapi` is in HWACCEL_AUTODETECT_LIBRARY_LIST, which feeds
       # CONFIG_LIST, so it is emitted as CONFIG_VAAPI. But `vaapi_drm` is in
-      # SYSTEM_LIBRARIES (configure:2565-2571), which configure:2662 folds
+      # SYSTEM_LIBRARIES (configure:2613-2619), which configure:2713 folds
       # into HAVE_LIST -- so it is emitted as HAVE_VAAPI_DRM and
       # CONFIG_VAAPI_DRM DOES NOT EXIST AT ALL. Asserting the latter fails on
       # every build no matter how healthy, which is exactly what round 10

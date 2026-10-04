@@ -65,7 +65,7 @@ case "$OS" in
     # (Nelux/CMakeLists.txt:313-336) with `lib.exe /def:`, because
     # doc/platform.texi warns that dlltool-generated import libs "will fail
     # during runtime" without /OPT:NOREF. Nothing extra is needed here --
-    # configure:6165 already installs $(SLIBNAME_WITH_MAJOR:.dll=.def) into
+    # configure:6248 already installs $(SLIBNAME_WITH_MAJOR:.dll=.def) into
     # LIBDIR for every library -- but scripts/verify-output.sh asserts they
     # are present, because silently losing them breaks nelux's CMake configure
     # with a confusing error.
@@ -90,11 +90,11 @@ case "$OS" in
     # iconv: mingw has no iconv in libc, and configure's
     # --disable-autodetect path forces the LIBC probe and never reaches the
     # -liconv fallback --
-    #     configure:4727-4731   disabled iconv || enable libc_iconv
-    #     configure:7838-7842   if enabled libc_iconv; then
+    #     configure:4790-4794   disabled iconv || enable libc_iconv
+    #     configure:7907-7911   if enabled libc_iconv; then
     #                               check_func_headers iconv.h iconv
     #                           elif enabled iconv; then ... -liconv ... fi
-    #     configure:8285-8287   requested $lib && ! enabled $lib && die
+    #     configure:8359-8361   requested $lib && ! enabled $lib && die
     # -- so without this the Windows build DIES at configure with
     # "ERROR: iconv requested but not found". test_ld appends $extralibs to
     # every probe link line, so --extra-libs is exactly the lever that makes
@@ -138,10 +138,10 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     # (common/threading.h:319,349,437).
     #
     # configure does NOT make up the difference. Its own pthread probe at
-    # configure:7152-7155 ends in `add_allcflags -pthread`, and add_allcflags
+    # configure:7234-7237 ends in `add_allcflags -pthread`, and add_allcflags
     # only touches CFLAGS/CXXFLAGS/OBJCFLAGS -- while test_ld links with
     #     $ld $LDFLAGS $LDEXEFLAGS $flags -o $TMPE $TMPO $libs $extralibs
-    # (no CFLAGS). So the probe for libx265 at configure:7432 links without
+    # (no CFLAGS). So the probe for libx265 at configure:7499 links without
     # any pthread at all and dies with the least useful message in the file:
     #     ERROR: x265 not found using pkg-config
     # -- identical to the message you get when x265.pc is missing entirely,
@@ -218,7 +218,7 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     # The literal four characters  $ O R I  ... must survive TWO expansions
     # before the linker ever sees them:
     #
-    #   1. configure:4624 (`--extra-ldflags=*) add_ldflags $optval`) copies the
+    #   1. configure:4685 (`--extra-ldflags=*) add_ldflags $optval`) copies the
     #      value verbatim into ffbuild/config.mak as `LDFLAGS=... <value>`.
     #   2. make expands `$$` -> `$` when it uses $(LDFLAGS) in the recipe.
     #   3. /bin/sh then runs that recipe line -- and expands `$ORIGIN`, which
@@ -259,14 +259,14 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     # macOS does NOT provide iconv in libc: the entry points live in
     # /usr/lib/libiconv.2.dylib and you must say -liconv. configure's normal
     # autodetect path copes --
-    #     configure:7840-7841  elif enabled iconv; then
+    #     configure:7909-7910  elif enabled iconv; then
     #                              check_func_headers iconv.h iconv ||
     #                              check_lib iconv iconv.h iconv -liconv
-    # -- because check_lib sets iconv_extralibs, which configure:4310 folds
+    # -- because check_lib sets iconv_extralibs, which configure:4372 folds
     # into avcodec_extralibs. But we pass --disable-autodetect, and
-    # configure:4727-4731 then forces
+    # configure:4790-4794 then forces
     #     disabled iconv || enable libc_iconv
-    # which takes the OTHER branch at :7838-7839, and that branch never names
+    # which takes the OTHER branch at :7907-7908, and that branch never names
     # a library at all: it only probes, and it ignores its own result. So
     # CONFIG_ICONV stays 1, nothing adds -liconv, and the build gets all the
     # way to the link before dying:
@@ -299,6 +299,20 @@ scripts/verify-output.sh's import allowlist will (correctly) fail the build."
     fi
     ;;
 esac
+
+# --- Vulkan shader compiler ------------------------------------------------
+# FFmpeg 9.0 compiles its GLSL compute shaders to SPIR-V during `make`.
+# Left alone, configure:7851-7853 tries `glslc`, `glslang` and
+# `glslangValidator` from PATH, and if none of them answers it disables
+# `spirv_compiler` WITHOUT failing -- quietly dropping every *_vulkan filter.
+# So: name our pinned glslang explicitly (a system glslc on the runner can
+# never be picked instead, and the SPIR-V we ship is reproducible), and check
+# it is there before configure gets the chance to shrug.
+if vulkan_target "$OS"; then
+  GLSLANG="$(glslang_bin "$OS")"
+  [ -x "$GLSLANG" ] || die "glslang not found at $GLSLANG -- run scripts/build-deps.sh (build_glslang). Without it every *_vulkan filter silently disappears from this build."
+  TOOLCHAIN+=("--glslc=$GLSLANG")
+fi
 
 # --- feature flags ---------------------------------------------------------
 declare -a FLAGS
@@ -373,7 +387,7 @@ if [ "$OS" = linux ] && [ "$ARCH" = x86_64 ]; then
   _vaapi_ok=1
   grep -q '^#define CONFIG_VAAPI 1$'     "$FF_BUILD/config.h" || _vaapi_ok=0
   # HAVE_, not CONFIG_: `vaapi_drm` lives in configure's SYSTEM_LIBRARIES
-  # (configure:2565-2571), which configure:2662 folds into HAVE_LIST. There is
+  # (configure:2613-2619), which configure:2713 folds into HAVE_LIST. There is
   # no CONFIG_VAAPI_DRM in any FFmpeg build. `vaapi` itself IS a CONFIG_ item
   # (HWACCEL_AUTODETECT_LIBRARY_LIST -> CONFIG_LIST), hence the asymmetry.
   grep -q '^#define HAVE_VAAPI_DRM 1$' "$FF_BUILD/config.h" || _vaapi_ok=0

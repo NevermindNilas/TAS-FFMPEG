@@ -56,7 +56,7 @@
 # Windows/macOS, which is exactly the per-platform divergence this repo
 # exists to remove.
 #
-# WHY NOT LibreSSL -- ffmpeg-8.1.2/configure:7382-7383 reads:
+# WHY NOT LibreSSL -- ffmpeg-9.0.2/configure:7449-7450 reads:
 #     enabled libtls && require_pkg_config libtls libtls tls.h tls_configure &&
 #         { enabled gpl && ! enabled nonfree &&
 #           die "ERROR: LibreSSL is incompatible with the gpl"; }
@@ -65,13 +65,13 @@
 # and false of this configure. Verified against the pinned tarball, not
 # assumed.
 #
-# WHY NOT OpenSSL -- configure:7493-7495 rejects BOTH directions under gpl:
+# WHY NOT OpenSSL -- configure:7552-7554 rejects BOTH directions under gpl:
 #     >= 3.0  -> "requires --enable-version3"   (we refuse version3)
 #     <  3.0  -> "is incompatible with the gpl"
-# WHY NOT mbedtls -- EXTERNAL_LIBRARY_VERSION3_LIST (configure:2007-2016),
+# WHY NOT mbedtls -- EXTERNAL_LIBRARY_VERSION3_LIST (configure:2051-2060),
 # so it would force GPLv3.
 #
-# GnuTLS is the only remaining option and it is clean: configure:7231 gates it
+# GnuTLS is the only remaining option and it is clean: configure:7317 gates it
 # on nothing but pkg-config, it is NOT in the version3 list, and it has no
 # gpl conflict. LGPL-2.1-or-later.
 #
@@ -97,3 +97,18 @@
 # v4l2_m2m   -- capture/codec devices, unused
 # alsa / sndio / xlib / libxcb -- capture devices; each would add an unpinned
 #               system .so to the runtime dependency closure of a shared build
+
+# ===========================================================================
+# Vulkan -- hwcontext, Vulkan Video decode (h264/hevc/av1/vp9 + more) and
+# encode (h264/hevc/av1), and the *_vulkan compute filters.
+# ===========================================================================
+# Like ffnvcodec and AMF, this is a runtime dlopen and NOT a link dependency:
+# libavutil/hwcontext_vulkan.c:650-682 loads libvulkan.so.1 on first use, so a
+# machine with no Vulkan driver still loads every DLL/so and simply cannot
+# create a Vulkan device. Headers, SPIRV-Headers and the glslang shader
+# compiler are pinned in versions.lock VULKAN_HEADERS_* / SPIRV_HEADERS_* /
+# GLSLANG_*; scripts/build-ffmpeg.sh passes --glslc= so configure uses OUR
+# glslang. Without a shader compiler configure would still accept this flag
+# and silently drop every *_vulkan filter -- verify-output.sh catches that.
+# All components are default-on, so this one flag is the whole opt-in.
+--enable-vulkan                               # owner

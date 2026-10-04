@@ -1,12 +1,64 @@
 # Handoff
 
-Last updated: 2026-08-08
+Last updated: 2026-10-04
 
 ## Where this stands
 
-`tas-ffmpeg` builds **FFmpeg n8.1.2** from pinned source for five targets, to
+`tas-ffmpeg` builds **FFmpeg n9.0.2** from pinned source for five targets, to
 replace the third-party builds nelux and TheAnimeScripter currently fetch from
 BtbN / gyan.dev / johnvansickle on rolling URLs.
+
+### The 9.0.2 bump (2026-10-04) -- NOT YET BUILT
+
+`versions.lock` moved from 8.1.2 to 9.0.2. **This is a major-version, ABI-
+breaking bump**: every SONAME major moved (avcodec/avdevice/avformat 62 -> 63,
+avfilter 11 -> 12, avutil 60 -> 61, swresample 6 -> 7, swscale 9 -> 10).
+Checked without a compiler:
+
+- tarball SHA256 hashed locally, `.asc` verified against the release key,
+  tag/commit read with `git ls-remote`;
+- `validate-flags.sh` passes for all five targets against the 9.0.2 source;
+- every name in `required-components.txt` still exists in the 9.0.2 source
+  (the 12 macro-generated ones -- `*_mf`, `*_cuvid`, `png_pipe` -- checked
+  against their macros);
+- no version floor changed for any library we enable. The only dependency
+  change is that configure dropped the ffnvcodec 11.0.x and 8.1.x brackets;
+  n12.1.14.0 is still the preferred bracket, so the NVIDIA driver floor does
+  not move;
+- every `configure:NNNN` citation in the repo was re-mapped by matching the
+  cited text, not by offset. That pass also found five citations that were
+  already wrong under 8.1.2 (libass, LAME, vorbis, VERSION3_LIST,
+  `version.sh:40`) and fixed them.
+
+### Vulkan (2026-10-04) -- NOT YET BUILT
+
+`--enable-vulkan` on win64, linux64 and linuxarm64 (not macOS). Pins:
+Vulkan-Headers, SPIRV-Headers and glslang, all at `vulkan-sdk-1.4.363.0`.
+README "Vulkan" has the whole argument; the parts most likely to bite in CI:
+
+- **glslang is a new HOST build** (`build_glslang`, cmake, ~51 MB of source,
+  `ENABLE_OPT=OFF` so it fetches no SPIRV-Tools). It is the first C++ host
+  tool built under MSYS2; if it fails there, that is the place to look.
+- **A missing shader compiler is silent in configure.** It drops every
+  `*_vulkan` filter with exit status 0. Three layers catch it: build-deps
+  runs `glslang -v`, build-ffmpeg refuses to configure without it, and the
+  `scale_vulkan` / `ffv1_vulkan` canaries in `required-components.txt`.
+  `spirv_compiler` is in NO list configure writes to config.h -- do not
+  "simplify" the canaries into a config.h grep, it would never pass.
+- `CONFIG_VULKAN_1_4` and `HAVE_SPIRV_UNIFIED1_SPIRV_H` are asserted in
+  verify-output 6b. Note the HAVE_ prefix on the second (HEADERS_LIST).
+- Nothing is linked: the loader is dlopen'd. If a DLL import / DT_NEEDED
+  allowlist fails on `vulkan-1.dll` / `libvulkan.so.1`, something linked
+  it by mistake -- do not add it to the allowlist.
+- Pre-flight done locally: all 58 shaders in 9.0.2 compile with configure's
+  exact glslang flags (glslang 16.2.0; the pin is 16.6.0). No compiler was
+  available to run configure itself.
+
+Not yet done: a CI run. The "all five legs green" status below is for
+8.1.2. And **nelux's committed `FFmpegDelayLoad.cpp:15-21` hardcodes the
+62-generation DLL names**: a 9.0.2 release breaks it at load time unless the
+generation-agnostic delay-load rewrite (uncommitted, see "Other repos") lands
+first, or the names are bumped.
 
 Repo is public at <https://github.com/NevermindNilas/TAS-FFMPEG>. Build system
 is MIT; the binaries it produces are GPL-2.0-or-later (see `LICENSE` — the two
@@ -14,7 +66,7 @@ things are deliberately separate).
 
 ### CI status
 
-**All five legs green**, run 31266899420 on `d863d0f`. Green means the full
+**All five legs green on 8.1.2**, run 31266899420 on `d863d0f`. Green means the full
 pipeline: build, install, every `verify-output.sh` assertion group (the
 component contract is now 151-173 entries depending on platform), plus
 `package.sh` and licence collection.
@@ -162,7 +214,7 @@ the machine).
   placeholder must stay at least as long as the real value; `build-ffmpeg.sh`
   asserts it.
 - **`CONFIG_VAAPI_DRM` does not exist.** `vaapi_drm` is in `SYSTEM_LIBRARIES`
-  (`configure:2565-2571`), which `configure:2662` folds into `HAVE_LIST`, so
+  (`configure:2613-2619`), which `configure:2713` folds into `HAVE_LIST`, so
   the symbol is `HAVE_VAAPI_DRM`. `vaapi` itself *is* a `CONFIG_` item. Two
   rounds were spent on an assertion that could never pass.
 - **A component being present is not the same as it working.** libvmaf proved

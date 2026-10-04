@@ -17,7 +17,8 @@
 #     x264/COPYING          (GPLv2)
 #     x265/COPYING          (GPLv2)
 #     libvpx, libaom, dav1d, SVT-AV1, opus, zimg, zlib, libvpl, AMF,
-#     nv-codec-headers     -- each project's own LICENSE/COPYING
+#     nv-codec-headers, Vulkan-Headers, SPIRV-Headers, glslang
+#                          -- each project's own LICENSE/COPYING
 #   plus LICENSING.md summarising the effective terms and the source offer.
 # ---------------------------------------------------------------------------
 set -euo pipefail
@@ -277,6 +278,10 @@ Components that are NOT linked on every platform:
   libvpl (oneVPL), AMF  Windows and Linux x86_64 only. No aarch64 or macOS
                         runtime exists.
   nv-codec-headers      Everywhere except macOS.
+  Vulkan-Headers,       Windows and Linux only. Header-only; the Vulkan
+  SPIRV-Headers         loader is the user's own, opened at runtime.
+  glslang               Windows and Linux only, and never linked: a build
+                        tool that compiles FFmpeg's shaders to SPIR-V.
 
 For the authoritative list of what THIS binary contains, read
   ../share/tas-ffmpeg/configure-command.txt   (the literal ./configure line)

@@ -28,7 +28,7 @@
 # --- Intel QSV: does not exist on aarch64 ----------------------------------
 # There is no Intel GPU behind an aarch64 CPU in any shipping configuration,
 # and the oneVPL dispatcher has no aarch64 runtime. libvpl would also be a
-# hard configure failure here: configure:7309-7317 does
+# hard configure failure here: configure:7382-7390 does
 #     check_pkg_config libmfx "vpl >= 2.6" ... || die "ERROR: libvpl >= 2.6 not found"
 # with no fallback, so leaving it on would abort the build, not degrade it.
 --disable-libvpl                              # both -- no aarch64 QSV runtime
@@ -57,3 +57,6 @@
 # flags/ffmpeg.linux.flags is arch-independent.
 # libvmaf, libopenh264, libzimg, x264, x265, dav1d, SVT-AV1, libaom, libvpx,
 # opus and zlib all build on aarch64 and all stay.
+# vulkan stays on too (inherited from flags/ffmpeg.linux.flags): Mesa and
+# NVIDIA both ship aarch64 Vulkan drivers, the loader is dlopen'd, and the
+# headers + glslang are architecture-neutral.

@@ -25,7 +25,7 @@ require_lock FFMPEG_VERSION FFMPEG_URL FFMPEG_SHA256 FFMPEG_COMMIT \
              ZIMG_TAG ZIMG_COMMIT ZIMG_REPO \
              ZLIB_TAG ZLIB_COMMIT ZLIB_REPO \
              LIBVPL_TAG LIBVPL_COMMIT LIBVPL_REPO \
-             AMF_TAG AMF_COMMIT AMF_REPO \
+             AMF_TAG AMF_COMMIT AMF_REPO              VULKAN_HEADERS_TAG VULKAN_HEADERS_COMMIT VULKAN_HEADERS_REPO              SPIRV_HEADERS_TAG SPIRV_HEADERS_COMMIT SPIRV_HEADERS_REPO              GLSLANG_TAG GLSLANG_COMMIT GLSLANG_REPO \
              VMAF_TAG VMAF_COMMIT VMAF_REPO \
              OGG_TAG OGG_COMMIT OGG_REPO \
              VORBIS_TAG VORBIS_COMMIT VORBIS_REPO \
@@ -92,8 +92,8 @@ fi
 #     /* This file is intentionally empty; it's only kept to fulfill make
 #      * dependencies for ffbuild/libversion.sh. It is not installed. */
 #
-# -- while LIBAVUTIL_VERSION_MAJOR 60 lives in libavutil/version.h:81.
-# (Verified against the unpacked 8.1.2 tarball, not assumed.)
+# -- while LIBAVUTIL_VERSION_MAJOR 61 lives in libavutil/version.h:81.
+# (Verified against the unpacked 8.1.2 and 9.0.2 tarballs, not assumed.)
 #
 # So an `[ -f "$hdr" ] || hdr=...version.h` fallback can never fire for
 # avutil: the file is present, merely empty. The old code then ran a grep
@@ -178,6 +178,12 @@ fetch_git "$LIBASS_REPO"   "$LIBASS_COMMIT"   "$SRC_DIR/libass"         "$LIBASS
 fetch_git "$LIBVPL_REPO"  "$LIBVPL_COMMIT"  "$SRC_DIR/libvpl"           "$LIBVPL_TAG"
 fetch_git "$AMF_REPO"     "$AMF_COMMIT"     "$SRC_DIR/AMF"              "$AMF_TAG"
 
+# Vulkan: Windows + Linux at build time, always fetched. The directory names
+# must match dep_dir() in scripts/lib/common.sh.
+fetch_git "$VULKAN_HEADERS_REPO" "$VULKAN_HEADERS_COMMIT" "$SRC_DIR/Vulkan-Headers" "$VULKAN_HEADERS_TAG"
+fetch_git "$SPIRV_HEADERS_REPO"  "$SPIRV_HEADERS_COMMIT"  "$SRC_DIR/SPIRV-Headers"  "$SPIRV_HEADERS_TAG"
+fetch_git "$GLSLANG_REPO"        "$GLSLANG_COMMIT"        "$SRC_DIR/glslang"        "$GLSLANG_TAG"
+
 # --- VAAPI stack (linux/x86_64 only at build time, always fetched) ---------
 # See versions.lock LIBVA_*/LIBDRM_*/IMPLIB_* for the whole argument. Short
 # version: QSV on Linux needs VAAPI compiled in, VAAPI linked normally puts
@@ -194,8 +200,8 @@ fetch_git "$IMPLIB_REPO"  "$IMPLIB_COMMIT"  "$SRC_DIR/Implib.so"        "$IMPLIB
 
 # --- TLS stack (Linux only at build time, always fetched for the archive) ---
 # See versions.lock: GnuTLS is the ONLY GPL-compatible TLS backend FFmpeg
-# 8.1.2 will accept (configure:7382-7383 rejects LibreSSL outright under
-# --enable-gpl, :7493-7494 rejects OpenSSL in both directions).
+# 9.0.2 will accept (configure:7449-7450 rejects LibreSSL outright under
+# --enable-gpl, :7552-7553 rejects OpenSSL in both directions).
 # Tarballs, not git: gmp is Mercurial upstream, and GnuTLS/Nettle publish
 # release tarballs as the canonical artefact.
 fetch_tarball "$GMP_URL"    "$SRC_DIR/$(dep_tarball GMP)"    "$GMP_SHA256"

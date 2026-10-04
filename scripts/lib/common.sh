@@ -16,6 +16,29 @@ WORK_DIR="${WORK_DIR:-$BUILD_ROOT/work}"       # extracted + object trees
 PREFIX_DIR="${PREFIX_DIR:-$BUILD_ROOT/deps}"   # where deps install
 OUT_DIR="${OUT_DIR:-$BUILD_ROOT/out}"          # staged install trees
 DIST_DIR="${DIST_DIR:-$REPO_ROOT/dist}"        # final archives
+# Programs that run ON THE BUILD HOST during the FFmpeg build (glslang).
+# Under PREFIX_DIR so it is reset together with the stamps that guard it, but
+# in its own tree so nothing in it is on the -I / -L search path.
+HOST_TOOLS_DIR="${HOST_TOOLS_DIR:-$PREFIX_DIR/host-tools}"
+
+# vulkan_target OS -- the ONE place that decides where Vulkan is built.
+# build-deps.sh (headers + glslang), build-ffmpeg.sh (--glslc=) and
+# verify-output.sh (the Vulkan assertions) all ask this, and
+# flags/ffmpeg.{windows,linux}.flags carry --enable-vulkan to match. A skip
+# here without dropping that flag is a hard configure failure
+# (configure:8359-8361: a requested library that is not found dies).
+vulkan_target() { [ "$1" = "windows" ] || [ "$1" = "linux" ]; }
+
+# glslang_bin OS -- the shader compiler build-deps.sh installs and
+# build-ffmpeg.sh hands to configure as --glslc=. Upstream installs the binary
+# as `glslang`; `glslangValidator` is only a compatibility SYMLINK, which is
+# not something to rely on under MSYS2. configure:7811 recognises it by its
+# `-v` output either way. The .exe is spelled out because `[ -x ]` is the
+# guard and should not depend on MSYS's implicit-suffix lookup.
+glslang_bin() {
+  if [ "$1" = "windows" ]; then echo "$HOST_TOOLS_DIR/bin/glslang.exe"
+  else echo "$HOST_TOOLS_DIR/bin/glslang"; fi
+}
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
@@ -128,6 +151,12 @@ dep_dir() {
     VMAF)     echo vmaf             ;;
     LIBVPL)   echo libvpl           ;;
     AMF)      echo AMF              ;;
+    # Vulkan (Windows + Linux). glslang is a host build tool -- nothing of it
+    # is linked -- but the SPIR-V it compiles is embedded in the libraries,
+    # so it is treated as shipped, on the same reasoning as IMPLIB below.
+    VULKAN_HEADERS) echo Vulkan-Headers ;;
+    SPIRV_HEADERS)  echo SPIRV-Headers  ;;
+    GLSLANG)        echo glslang        ;;
     LIBVA)    echo libva            ;;
     LIBDRM)   echo libdrm           ;;
     # Implib.so's OUTPUT is linked into libavutil.so on linux/x86_64 (the
@@ -268,7 +297,7 @@ reviewed commit."
 #      including CMakeLists.txt:1133-1135's `configure_file`/`install` of
 #      x265.pc -- is skipped. x265 builds, installs libx265.a and its
 #      headers, and simply never writes lib/pkgconfig/x265.pc. FFmpeg's
-#      configure:7432 `require_pkg_config libx265 x265 ...` is a hard die, so
+#      configure:7499 `require_pkg_config libx265 x265 ...` is a hard die, so
 #      BOTH Linux legs got through the whole 15-minute dependency build and
 #      then failed with
 #          ERROR: x265 not found using pkg-config
@@ -411,7 +440,7 @@ nproc_portable() {
 # there is no profile component in the name -- only version and platform.
 # Format is deliberately close to BtbN's so TheAnimeScripter's existing
 # extraction code (src/infra/getFFMPEG.py:316-335) needs only a URL change.
-artifact_name() {  # artifact_name <os> <arch> -> tas-ffmpeg-8.1.2-win64
+artifact_name() {  # artifact_name <os> <arch> -> tas-ffmpeg-9.0.2-win64
   local os="$1" arch="$2" plat
   case "$os-$arch" in
     windows-x86_64) plat=win64 ;;

@@ -22,7 +22,7 @@
 #   av_version_info() is a one-call, always-present libavutil export that
 #   returns the FFMPEG_VERSION string. Because scripts/build-ffmpeg.sh passes
 #   --extra-version=tas, ours is "<version>-tas" -- verified against
-#   ffbuild/version.sh:40 (`test -n "$3" && version=$version-$3`) and :48
+#   ffbuild/version.sh:41 (`test -n "$3" && version=$version-$3`) and :48
 #   (`#define FFMPEG_VERSION "$version"`). A stock distro or BtbN FFmpeg will
 #   NEVER produce that string, so the assertion also catches "we accidentally
 #   loaded someone else's FFmpeg", not just "we loaded an older ours".

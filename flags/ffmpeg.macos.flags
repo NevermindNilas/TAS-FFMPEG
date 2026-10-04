@@ -24,9 +24,9 @@
 --enable-audiotoolbox                         # union -- aac_at / alac_at, system framework
 
 # TLS via SecureTransport -- the system implementation. Same GPLv2 reasoning
-# as Schannel on Windows: it avoids OpenSSL >= 3.0, which configure:7493
+# as Schannel on Windows: it avoids OpenSSL >= 3.0, which configure:7552
 # forbids without --enable-version3.
-# NOTE: SecureTransport is deprecated by Apple. It still builds in 8.1.2; if
+# NOTE: SecureTransport is deprecated by Apple. It is still in 9.0.2's configure; if
 # it is ever removed the replacement is the same one Linux needs -- pin
 # LibreSSL and use --enable-libtls.
 --enable-securetransport                      # TAS

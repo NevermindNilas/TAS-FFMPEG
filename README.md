@@ -39,7 +39,7 @@ Three problems with that:
    human to do this (lines 16-20). That is a drift generator, and drift here
    is not cosmetic — see [Drift](#drift).
 
-This repo builds exactly **FFmpeg n8.1.2** from source, from pinned
+This repo builds exactly **FFmpeg n9.0.2** from source, from pinned
 dependencies, and publishes one `ffmpeg-pin.lock` that both consumers vendor.
 
 ---
@@ -122,7 +122,8 @@ What is *not* built in — and what a `--custom_encoder` user will hit "Unknown
 encoder/filter" on — is listed in `flags/ffmpeg.flags` §5:
 libass/libfreetype (so no `subtitles=` or `drawtext` burn-in), libmp3lame,
 libwebp, libopenjpeg, librav1e, libxvid, libtheora, libvorbis, libsrt,
-librist, libplacebo/vulkan, avisynth, and the rest. Each would add another
+librist, libplacebo, avisynth, and the rest. (Vulkan itself *is* built in —
+see [Vulkan](#vulkan).) Each would add another
 pinned dependency and more surface to keep building on five targets. If one
 turns out to matter: pin it in `versions.lock`, add one line to
 `flags/ffmpeg.flags`, add one line to `flags/required-components.txt` so the
@@ -137,8 +138,8 @@ turned up: **libvmaf** (`Nelux/tests/test_software_encoders.py:181` raises at
 
 ## <a id="drift"></a>No build suffix — and why that needs two safeguards
 
-The libraries are named plainly: `avcodec-62.dll`, `libavcodec.so.62`,
-`libavcodec.62.dylib`. There is **no `--build-suffix`**.
+The libraries are named plainly: `avcodec-63.dll`, `libavcodec.so.63`,
+`libavcodec.63.dylib`. There is **no `--build-suffix`**.
 
 That means nelux's bundled copy and TAS's `ffmpeg_shared/` copy have identical
 file names, and on Windows **whichever loads into the process first serves
@@ -166,17 +167,17 @@ Every archive contains one, written by `scripts/make-manifest.sh`:
 
 ```jsonc
 {
-  "av_version_info": "8.1.2-tas",
-  "soname_majors": { "avcodec": 62, "avdevice": 62, "avfilter": 11,
-                     "avformat": 62, "avutil": 60,
-                     "swresample": 6, "swscale": 9 },
-  "artifacts_sha256": { "bin/avcodec-62.dll": "…" }
+  "av_version_info": "9.0.2-tas",
+  "soname_majors": { "avcodec": 63, "avdevice": 63, "avfilter": 12,
+                     "avformat": 63, "avutil": 61,
+                     "swresample": 7, "swscale": 10 },
+  "artifacts_sha256": { "bin/avcodec-63.dll": "…" }
 }
 ```
 
 `av_version_info()` is a one-call, always-present `libavutil` export returning
 the `FFMPEG_VERSION` string. Because the build passes `--extra-version=tas`,
-ours is **`8.1.2-tas`** — verified against `ffbuild/version.sh:40`
+ours is **`9.0.2-tas`** — verified against `ffbuild/version.sh:41`
 (`test -n "$3" && version=$version-$3`) and `:48`
 (`#define FFMPEG_VERSION "$version"`).
 
@@ -277,6 +278,7 @@ zero exit status. So every assertion interrogates the **built artefact**.
 | 4 | Licence is **GPL v2 or later**, not GPLv3, not LGPL, not nonfree — checked from `ffmpeg -L`, from the `configuration:` line, **and** from `config.h` | A nonfree build is undistributable; a GPLv3 build stops combining with GPLv2-only code; an LGPL build means `--enable-gpl` was lost, i.e. **no x264 and no x265** |
 | 5 | **Every line of `flags/required-components.txt` is present in the built binary**, on the platforms it applies to — driven by `ffmpeg -encoders / -decoders / -muxers / -demuxers / -filters / -protocols / -bsfs / -devices` | This is the highest-value check here. It is what turns *"we think the flags are right"* into *"the build proves it"* |
 | 6 | Threading is compiled in | See the `--disable-autodetect` trap: the build succeeds and is silently single-threaded |
+| 6b | Windows + Linux: `CONFIG_VULKAN`, `CONFIG_VULKAN_1_4` and `HAVE_SPIRV_UNIFIED1_SPIRV_H` in `config.h`; `ffmpeg -hwaccels` lists `vulkan`; avutil carries the loader's name (it is `dlopen`'d). Together with the `scale_vulkan` / `ffv1_vulkan` canaries in check 5 | Headers too old for 1.4 silently lose `vp9_vulkan`; missing SPIRV-Headers is only a configure *warning*; a missing shader compiler silently drops every `*_vulkan` filter. See [Vulkan](#vulkan) |
 | 7 | Windows: every `.def` file is present; no DLL/EXE imports a non-system DLL | A missing `.def` breaks nelux's CMake configure; a dynamic `zlib1.dll` / `libx264-*.dll` / `libwinpthread-1.dll` makes the nelux wheel unimportable |
 | 8 | Linux: no GLIBC symbol newer than 2.28, **and** every `DT_NEEDED` is inside the manylinux_2_28 policy set | `auditwheel` rejects nelux's *entire* wheel over a single bad reference; a stray `libgnutls.so.30` / `libva.so.2` / `libz.so.1` is the Linux spelling of the same bug as #7 |
 | 8b | linux/x86_64: `libva` / `libva-drm` / `libdrm` appear in **no** `DT_NEEDED`, **and** VAAPI is nevertheless compiled in and still reaching libva through the Implib.so stub | Both directions, because absence alone is also what a build that quietly lost QSV looks like. Unlike its neighbours this one does **not** degrade to a warning when `objdump` is missing — the failure it guards is invisible until `auditwheel` runs in another repository |
@@ -310,6 +312,7 @@ to?"
 | `h264_qsv`, `hevc_qsv`, `av1_qsv`, `vp9_qsv`, `mpeg2_qsv` | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `h264_amf`, `hevc_amf` | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `h264_mf`, `hevc_mf` (MediaFoundation) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `h264_vulkan`, `hevc_vulkan`, `av1_vulkan`, `ffv1_vulkan`, `prores_ks_vulkan`, and the `*_vulkan` filters | ✅ | ✅ | ✅ | ❌ | ❌ |
 | `h264_videotoolbox`, `hevc_videotoolbox`, `prores_videotoolbox` | ❌ | ❌ | ❌ | ✅ | ✅ |
 | `zscale` filter, `libvmaf` filter | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `https://` (TLS backend) | ✅ Schannel | ✅ GnuTLS | ✅ GnuTLS | ✅ SecureTransport | ✅ SecureTransport |
@@ -363,18 +366,19 @@ the minimum NVIDIA driver version for every NVENC/NVDEC feature in this build:
 | **`n12.1.14.0`** (chosen) | **530.41.03** | **531.61** |
 | `n13.0.19.0` | 570.0 | 570.0 |
 
-`ffmpeg-8.1.2/configure:7126-7130` accepts, in order of preference:
+`ffmpeg-9.0.2/configure:7214-7216` accepts, in order of preference:
 
 ```
 ffnvcodec >= 12.1.14.0                 (unbounded upper -- 13.x also matches)
 ffnvcodec >= 12.0.16.1  < 12.1
 ffnvcodec >= 11.1.5.3   < 12.0
-ffnvcodec >= 11.0.10.3  < 11.1
-ffnvcodec >= 8.1.24.15  < 8.2
 ```
 
+(9.0 dropped the `11.0.x` and `8.1.x` brackets that 8.1.2 still accepted;
+neither was ever our choice.)
+
 **Why `n12.1.14.0`:** it is the lowest version inside FFmpeg's *preferred*
-bracket, so we get every NVENC/NVDEC feature FFmpeg 8.1.2 knows how to use
+bracket, so we get every NVENC/NVDEC feature FFmpeg 9.0.2 knows how to use
 (including AV1 NVENC, which needs ≥ 12.0 — TAS has three `av1_nvenc` presets),
 while keeping the driver floor at 531.61 (March 2023) instead of 570.x
 (January 2025). Bumping to `n13.0.19.0` would cut off every user on a
@@ -384,8 +388,58 @@ The headers are stubs: they `dlopen`/`LoadLibrary` `nvcuda.dll` /
 `libnvidia-encode.so` at runtime. **No CUDA toolkit is needed to build, and no
 NVIDIA binary is redistributed.** We also skip `--enable-cuda-nvcc`, which is
 only needed for the CUDA *filters* (`scale_cuda`, …) — neither consumer uses
-one. TAS uses `hwupload_cuda`, and `configure:3518` shows
+one. TAS uses `hwupload_cuda`, and `configure:3577` shows
 `hwupload_cuda_filter_deps="ffnvcodec"` only.
+
+---
+
+## <a id="vulkan"></a>Vulkan
+
+Built on **win64, linux64 and linuxarm64**; not on macOS. macOS ships no
+Vulkan driver, MoltenVK has no Vulkan Video, and nothing in CI could test it.
+`scripts/lib/common.sh` `vulkan_target` is the single switch every script
+consults.
+
+What `--enable-vulkan` brings in (every Vulkan component is default-on):
+the `vulkan` hwcontext and `-hwaccel vulkan`; Vulkan Video **decode**
+(`h264`, `hevc`, `av1`, `vp9`, plus `ffv1`, `prores`, `prores_raw`, `dpx`,
+`apv` via compute shaders); Vulkan Video **encode** (`h264_vulkan`,
+`hevc_vulkan`, `av1_vulkan`) and the compute encoders `ffv1_vulkan` and
+`prores_ks_vulkan`; the 18 `*_vulkan` filters (`scale_vulkan`,
+`overlay_vulkan`, `nlmeans_vulkan`, `bwdif_vulkan`, `xfade_vulkan`, …); and
+swscale's SPIR-V backend. **Not** `libplacebo` — that is a separate,
+unpinned dependency.
+
+**Nothing is linked.** `libavutil/hwcontext_vulkan.c` `dlopen`s the loader
+(`vulkan-1.dll` / `libvulkan.so.1`) on first use, like the NVIDIA and AMF
+stubs. A machine with no Vulkan driver loads every DLL/so normally and simply
+cannot create a Vulkan device. No DLL is added to the archive and the
+import / `DT_NEEDED` allowlists are unchanged; they would *fail* the build if
+the loader were ever linked. What actually works at runtime depends on the
+user's driver: Vulkan Video needs `VK_KHR_video_*` support, which in practice
+means recent NVIDIA, AMD (RADV / AMDVLK) and Intel (ANV) drivers.
+
+Three pinned inputs, all at the same Vulkan SDK tag (`versions.lock`
+`VULKAN_HEADERS_*`, `SPIRV_HEADERS_*`, `GLSLANG_*`):
+
+- **Vulkan-Headers** — configure needs ≥ 1.3.277, and ≥ 1.4.317 for
+  `vp9_vulkan`. Licensed `Apache-2.0 OR MIT`; we take MIT, so the binaries
+  stay GPL-2.0-or-later.
+- **SPIRV-Headers** — *optional* to configure, which only warns without it
+  and drops swscale's Vulkan backend. That is why it is pinned and asserted.
+- **glslang** — a **build-time shader compiler**. FFmpeg 9.0 compiles 58 GLSL
+  compute shaders to SPIR-V during `make` and embeds them. Without a compiler,
+  configure disables `spirv_compiler` **without an error**, and every
+  `*_vulkan` filter, both compute encoders and five hwaccels vanish. It is
+  built from source (EL8's package is too old for configure's flags, and its
+  output ships), installed outside the link path, and handed to configure as
+  `--glslc=` so a system `glslc` can never be picked up instead.
+
+`spirv_compiler` appears in no list configure writes to `config.h`, so
+nothing in `config.h` can prove the shaders were compiled.
+`flags/required-components.txt` therefore carries two canaries,
+`scale_vulkan` (avfilter's shaders) and `ffv1_vulkan` (avcodec's). See check
+6b in [What `verify-output.sh` catches](#verify) for the rest.
 
 ---
 
@@ -395,7 +449,7 @@ one. TAS uses `hwupload_cuda`, and `configure:3518` shows
 required.
 
 `--enable-version3` is deliberately **not** set. Verified against the source,
-not assumed: `ffmpeg-8.1.2/configure:2007-2016` defines
+not assumed: `ffmpeg-9.0.2/configure:2051-2060` defines
 `EXTERNAL_LIBRARY_VERSION3_LIST` as exactly
 
 ```
@@ -403,7 +457,7 @@ gmp libaribb24 liblensfun libopencore_amrnb libopencore_amrwb
 libvo_amrwbenc mbedtls rkmpp
 ```
 
-We enable none of them, so nothing forces version3 on us. `configure:4773`
+We enable none of them, so nothing forces version3 on us. `configure:4836`
 then reads:
 
 ```sh
@@ -417,7 +471,7 @@ x264's `COPYING` is the plain GPLv2 text and upstream now maintains an explicit
 `GPLv2-only` branch, so this is not hypothetical.
 
 One consequence, enforced in the per-OS flag files: **no OpenSSL ≥ 3.0**.
-`configure:7493` hard-fails that combination:
+`configure:7552` hard-fails that combination:
 
 ```sh
 { enabled gplv3 || ! enabled gpl || enabled nonfree
@@ -456,7 +510,7 @@ exists to remove.
 ### Why **not** LibreSSL
 
 This is the one place where the obvious answer is wrong, so it is worth
-spelling out. `ffmpeg-8.1.2/configure:7382-7383`:
+spelling out. `ffmpeg-9.0.2/configure:7449-7450`:
 
 ```sh
 enabled libtls && require_pkg_config libtls libtls tls.h tls_configure &&
@@ -468,11 +522,11 @@ enabled libtls && require_pkg_config libtls libtls tls.h tls_configure &&
 ISC-licensed, therefore GPLv2-compatible" is true of the *licence* and false of
 *this configure*. Verified by reading the pinned tarball.
 
-OpenSSL is rejected in both directions (`configure:7493-7494`): ≥ 3.0 demands
+OpenSSL is rejected in both directions (`configure:7552-7553`): ≥ 3.0 demands
 `--enable-version3`, < 3.0 is "incompatible with the gpl". mbedtls is in
 `EXTERNAL_LIBRARY_VERSION3_LIST` and would force GPLv3.
 
-**GnuTLS is the only remaining option**, and it is clean: `configure:7231`
+**GnuTLS is the only remaining option**, and it is clean: `configure:7317`
 gates it on nothing but pkg-config, and it is in neither the version3 nor the
 nonfree list.
 
@@ -517,12 +571,12 @@ execute_process(
 libs *"will fail during runtime"* without `/OPT:NOREF`.
 
 **This build emits the `.def` files that path depends on.** Verified against
-`ffmpeg-8.1.2/configure`:
+`ffmpeg-9.0.2/configure`:
 
-- `:6166` `SLIB_CREATE_DEF_CMD` runs `compat/windows/makedef` for every library;
-- `:6165` `SLIB_INSTALL_EXTRA_LIB='lib$(SLIBNAME:.dll=.dll.a) $(SLIBNAME_WITH_MAJOR:.dll=.def)'`
+- `:6249` `SLIB_CREATE_DEF_CMD` runs `compat/windows/makedef` for every library;
+- `:6248` `SLIB_INSTALL_EXTRA_LIB='lib$(SLIBNAME:.dll=.dll.a) $(SLIBNAME_WITH_MAJOR:.dll=.def)'`
   installs both the `.dll.a` **and** the `.def` into `LIBDIR`;
-- `:6164` additionally installs a `.lib` into `SHLIBDIR` (which `:6149` sets to
+- `:6247` additionally installs a `.lib` into `SHLIBDIR` (which `:6232` sets to
   `bindir` on mingw).
 
 `verify-output.sh` asserts every `.def` is present, because silently losing
@@ -605,7 +659,7 @@ Every number there is **ESTIMATED** — nothing has been compiled.
 | **`h264_mf` is Windows-only but is nelux's default encoder.** | **Fixed on the nelux side, and this repo now backs it.** `VideoEncoder.cpp:38-88` is a runtime *probe*, not a hardcoded name: Windows `h264_mf → libx264 → libopenh264`, macOS `libx264 → h264_videotoolbox → libopenh264`, Linux `libx264 → libopenh264`, throwing at `:83-87` if none resolves. This build guarantees **every** name in every chain on the platform where it can exist — including `libopenh264`, newly pinned, which the probe names but should never reach. See [Which encoders exist on which platform](#encoders-per-platform). |
 | **MP3 encoding unavailable.** | **Not a gap — no dependency added, deliberately.** Checked against both consumers rather than assumed. *nelux*: `AV_CODEC_ID_MP3` (`Encoder.cpp:399`) is the 4th entry of a *probe* list, every candidate gated on `avformat_query_codec(...) && avcodec_find_encoder(c)` (`:404-405`), with native AAC first, and the whole list only consulted when `av_guess_codec()` came back empty (`:396`) — which never happens for the five containers `inferContainerFormat()` produces. It degrades cleanly. *TAS*: zero references to `mp3`/`libmp3lame`/`wav`/`flac`/`m4a` under `src/`; the only `-c:a` in the repo is `ffmpegSettings.py:860`, fed by `:846-859` with exactly `{copy, libopus, aac}`. MP3 **decoding** works and is asserted. If `--custom_encoder` ever needs `-c:a libmp3lame`, LAME 3.100's SHA256 is recorded in `flags/ffmpeg.flags` so pinning it is a two-line change. |
 | **No `linux/aarch64` target.** | **Added.** `flags/ffmpeg.linux.arm64.flags` (a last-wins delta: no QSV, no VAAPI, no AMF; NVENC/NVDEC/CUVID and GnuTLS kept), `MANYLINUX_IMAGE_AARCH64` in `versions.lock`, the shared Dockerfile parameterised by `TARGETARCH`, a `ubuntu-24.04-arm` CI job, and `LINUXARM64_*` keys in `ffmpeg-pin.lock`. All five targets now build, so nelux can drop its BtbN aarch64 fallback and the "identical builds" guarantee holds everywhere. |
-| **No TLS on Linux.** | **Added — GnuTLS, not LibreSSL.** The brief's suggested fix does not work: `configure:7382-7383` ends `--enable-libtls` with `die "ERROR: LibreSSL is incompatible with the gpl"`. See [TLS](#tls) for the evidence that TAS actually reaches an `https://` URL through our ffmpeg (`ytdlp.py:184,202` + yt-dlp's `FFmpegFD` fallback). |
+| **No TLS on Linux.** | **Added — GnuTLS, not LibreSSL.** The brief's suggested fix does not work: `configure:7449-7450` ends `--enable-libtls` with `die "ERROR: LibreSSL is incompatible with the gpl"`. See [TLS](#tls) for the evidence that TAS actually reaches an `https://` URL through our ffmpeg (`ytdlp.py:184,202` + yt-dlp's `FFmpegFD` fallback). |
 
 ### Still open
 
@@ -644,27 +698,31 @@ Treat the first CI run as the real review.
 
 ### Verified from primary sources (safe to rely on)
 
-- FFmpeg 8.1.2 tarball SHA256 `464beb5e…24c` — **computed locally** from the
-  11,710,924-byte file downloaded from ffmpeg.org.
-- `n8.1.2` → commit `38b88335f99e76ed89ff3c93f877fdefce736c13`, via the
-  annotated tag object `1c2c67c0…`, PGP signature reported valid.
-- All seven soname majors, read from `lib*/version_major.h` in that tarball.
+- FFmpeg 9.0.2 tarball SHA256 `8c385028…02e` — **computed locally** from the
+  12,040,788-byte file downloaded from ffmpeg.org on 2026-10-04, and its
+  detached `.asc` verified ("Good signature") against the release key
+  `FCF986EA…D67658D8`.
+- `n9.0.2` → commit `946fcce07b6dcd0331c8cc609192aeff5e1924f8`, via the
+  annotated tag object `ce8f11b9…`, read with `git ls-remote`.
+- All seven soname majors, read from `lib*/version_major.h` (and
+  `libavutil/version.h`) in that tarball.
 - Every configure behaviour cited in this README and in `flags/` — line numbers
-  are from the 8.1.2 tarball, read directly.
+  are from the 9.0.2 tarball. Each citation was carried over from 8.1.2 by
+  matching the cited lines' exact text in the new `configure`, not by offset.
 - **Every flag and component name in `flags/`**, checked against
-  `./configure --list-*` from the real 8.1.2 source. This caught `mov_text`
-  (the configure name is `movtext`), which configure accepts and silently
-  ignores.
+  `./configure --list-*` from the real 9.0.2 source (originally 8.1.2).
+  This caught `mov_text` (the configure name is `movtext`), which configure
+  accepts and silently ignores.
 - `--disable-autodetect` also disables `THREADS_LIST` — so it silently
   produces a single-threaded FFmpeg unless `--enable-w32threads` /
   `--enable-pthreads` is named. Both are, and `verify-output.sh` asserts it.
 - `--disable-postproc` and `--disable-examples` are **not valid options** in
-  8.1.2 (libpostproc is gone); `configure` rejects them. Removed.
-- `av_version_info()` will be exactly `8.1.2-tas`, from
-  `ffbuild/version.sh:40,48`.
-- **LibreSSL cannot be used.** `configure:7382-7383` ends `--enable-libtls`
+  8.1.2 or 9.0.2 (libpostproc is gone); `configure` rejects them. Removed.
+- `av_version_info()` will be exactly `9.0.2-tas`, from
+  `ffbuild/version.sh:41,48`.
+- **LibreSSL cannot be used.** `configure:7449-7450` ends `--enable-libtls`
   with `die "ERROR: LibreSSL is incompatible with the gpl"`. Read from the
-  tarball. GnuTLS is the only GPL-compatible TLS backend in 8.1.2.
+  tarball. GnuTLS is the only GPL-compatible TLS backend in 9.0.2.
 - **Every name in `flags/required-components.txt` is a real CLI name.** All
   171 were checked against `ffmpeg -encoders/-decoders/-muxers/-demuxers/
   -filters/-protocols/-bsfs/-devices` from a real FFmpeg 8.1.2 GPL shared
@@ -680,8 +738,8 @@ Treat the first CI run as the real review.
   theoretical.
 - The two manylinux base-image digests were read from quay.io's own API on
   2026-08-04, not guessed.
-- The FFmpeg 8.1.2 tarball SHA256 in `versions.lock` was re-verified by
-  downloading from ffmpeg.org and hashing: it matches.
+- The FFmpeg 9.0.2 tarball SHA256 in `versions.lock` was obtained by
+  downloading from ffmpeg.org and hashing on 2026-10-04.
 - LAME 3.100, GMP 6.3.0, Nettle 3.10.2 and GnuTLS 3.8.10 SHA256s were all
   obtained by downloading and hashing locally on 2026-08-04.
 
@@ -691,15 +749,15 @@ Treat the first CI run as the real review.
 2. **The x265 multilib archive merge.** The `ar -M` / `libtool -static` splice
    of `libx265_main{,10,12}.a` is the standard recipe but is untested here; a
    symbol collision or a stale `x265.pc` would only show at FFmpeg link time.
-3. **`libvpl` on Windows.** `configure:7309-7317` dies outright if
+3. **`libvpl` on Windows.** `configure:7382-7390` dies outright if
    `pkg-config vpl >= 2.6` fails, and MSYS2 pkg-config path handling is
    notoriously fragile with Windows-style prefixes. Most likely single point
    of failure in the whole matrix.
 4. **`vpl v2023.4.0` actually advertising `vpl >= 2.6`.** Read from the tag
    name, not from a generated `vpl.pc`.
-5. **`MFX_CODEC_VP9` under libvpl.** `configure:3672` gates the `vp9_qsv`
+5. **`MFX_CODEC_VP9` under libvpl.** `configure:3727` gates the `vp9_qsv`
    *encoder* on `libmfx MFX_CODEC_VP9`; the libvpl branch enables the internal
-   `libmfx` symbol and `configure:7319-7321` then runs the `check_cc`. TAS's
+   `libmfx` symbol and `configure:7392-7394` then runs the `check_cc`. TAS's
    `qsv_vp9` preset depends on this working. Unconfirmed.
 6. **AMF header layout.** `build-deps.sh` copies `amf/public/include` to
    `$PREFIX/include/AMF`; AMF v1.5.2 may have moved it.
@@ -723,8 +781,8 @@ Treat the first CI run as the real review.
      runtime. The define is passed both to bzip2's own build and to FFmpeg's
      CFLAGS. Reasoned from the header, not observed.
    * **iconv on Windows.** `--disable-autodetect` forces configure down the
-     `libc_iconv` branch (`configure:4727-4731`, `:7838-7842`), which never
-     reaches the `-liconv` fallback, so `configure:8285-8287` would `die` on
+     `libc_iconv` branch (`configure:4790-4794`, `:7907-7911`), which never
+     reaches the `-liconv` fallback, so `configure:8359-8361` would `die` on
      mingw. `--extra-libs=-liconv` is passed so the probe's link line picks up
      our static `libiconv.a`. Traced through the pinned `configure`, not run.
 8. **The Windows static-runtime story.** `-static-libgcc` and
@@ -774,7 +832,7 @@ Treat the first CI run as the real review.
     `-Denable_float=true` is passed explicitly because `float_ssim` needs it
     and that default has moved between 2.x and 3.x. OpenH264 is built via
     meson rather than its hand-written Makefile so that `openh264.pc` is
-    generated for `configure:7343`; the meson path is upstream-supported but
+    generated for `configure:7410`; the meson path is upstream-supported but
     untested here.
 19. **aarch64 assembly.** x264, x265, dav1d, libaom, SVT-AV1, libvpx and
     libvmaf all take a different (gas `.S`) assembly path on aarch64 than the

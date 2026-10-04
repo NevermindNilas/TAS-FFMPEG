@@ -124,6 +124,21 @@ encoder h264_videotoolbox   macos   # union -- the macOS probe that named it is 
 encoder hevc_videotoolbox   macos   # union -- the only other macOS hw encoder; reachable from --custom_encoder
 encoder prores_videotoolbox macos   # union -- same
 
+# ENCODERS -- Vulkan. Windows + Linux (scripts/lib/common.sh vulkan_target).
+# These lines are CANARIES, not a feature list: --enable-vulkan turns on all
+# of FFmpeg's Vulkan components, and the ways it can silently come out short
+# are each caught by one of these.
+#   h264/hevc/av1_vulkan  need only `vulkan` + `vulkan_encode`. Missing means
+#                         the Vulkan headers were not found / too old.
+#   ffv1_vulkan           also needs `spirv_compiler`, i.e. glslang ran and
+#                         libavcodec's shaders were compiled in. That symbol
+#                         is in NO list configure prints, so config.h cannot
+#                         prove it -- this line is the only proof for avcodec.
+encoder h264_vulkan   windows,linux   # owner -- Vulkan Video encode
+encoder hevc_vulkan   windows,linux   # owner -- Vulkan Video encode
+encoder av1_vulkan    windows,linux   # owner -- Vulkan Video encode
+encoder ffv1_vulkan   windows,linux   # owner -- canary: libavcodec SPIR-V shaders compiled in (configure:3192 selects spirv_compiler)
+
 
 # ===========================================================================
 # DECODERS
@@ -252,8 +267,10 @@ filter testsrc2     all   # nelux -- same
 filter mandelbrot   all   # nelux -- tests/benchmark_decode_throughput.py:34-35
 filter color        all   # union -- lavfi source
 filter nullsrc      all   # union -- lavfi source
-filter hwupload_cuda  all,!macos   # TAS -- ffmpegSettings.py:734-738 (deps are ffnvcodec only, configure:3518)
+filter hwupload_cuda  all,!macos   # TAS -- ffmpegSettings.py:734-738 (deps are ffnvcodec only, configure:3577)
 filter hwdownload     all,!macos   # union -- the inverse of the above
+filter hwupload       windows,linux   # owner -- the generic upload every *_vulkan filter chain starts with
+filter scale_vulkan   windows,linux   # owner -- canary: libavfilter SPIR-V shaders compiled in (configure:4304); every other *_vulkan filter shares its dependency
 
 
 # ===========================================================================

@@ -72,6 +72,9 @@ and also at `share/tas-ffmpeg/configure-command.txt` inside this one.
 | Intel oneVPL dispatcher (libvpl) | MIT | `libvpl/` |
 | AMD AMF headers | MIT | `AMF/` |
 | nv-codec-headers | MIT | `nv-codec-headers/` |
+| Vulkan-Headers *(Windows + Linux)* | `Apache-2.0 OR MIT` (per-file SPDX) — we take **MIT** | `Vulkan-Headers/` |
+| SPIRV-Headers *(Windows + Linux)* | MIT-style (Khronos) | `SPIRV-Headers/` |
+| glslang *(Windows + Linux, build tool)* | BSD-3-Clause / Apache-2.0 / MIT mix — see its `LICENSE.txt`. Nothing of glslang is linked; it compiles FFmpeg's own GLSL shaders to the SPIR-V embedded in the libraries | `glslang/` |
 | libva *(linux/x86_64 only)* | MIT — built, then replaced by an Implib.so stub; no libva code is linked into the binaries, only the generated trampolines | `libva/` |
 | libdrm *(linux/x86_64 only)* | MIT — a build-time prerequisite of libva, linked as a static archive that nothing references, so no libdrm code reaches the binaries | `libdrm/` |
 | Implib.so *(linux/x86_64 only)* | MIT | `Implib.so/` |
@@ -102,10 +105,18 @@ combined work up to GPLv3 by the back door, which is the exact outcome
 `--enable-version3` was avoided to prevent. This is a licence *election*, not
 a build flag — it is recorded here because it is the only place it can be.
 
+**On the Vulkan components.** Every Vulkan header compiled into these
+binaries is marked `SPDX-License-Identifier: Apache-2.0 OR MIT`. Apache-2.0
+alone is not GPLv2-compatible, so the MIT arm is the one taken — like the
+GMP/Nettle election above, this is what keeps the work at
+GPL-2.0-or-later. glslang is a compiler, not a library: the SPIR-V it emits
+is a translation of FFmpeg's own LGPL shader sources. Its source is in the
+corresponding-source archive anyway, because its output is in the binaries.
+
 **On LibreSSL.** It is often assumed that libtls is the GPL-friendly TLS
-option. FFmpeg disagrees: `configure:7382-7383` ends `--enable-libtls` with
+option. FFmpeg disagrees: `configure:7449-7450` ends `--enable-libtls` with
 `die "ERROR: LibreSSL is incompatible with the gpl"`. GnuTLS is the only
-backend FFmpeg 8.1.2 will accept in a GPL build on Linux.
+backend FFmpeg 9.0.2 will accept in a GPL build on Linux.
 
 **On FreeType's dual licence.** FreeType is offered under either the FreeType
 Licence (FTL) or GPL-2.0-or-later. The FTL is GPLv3-compatible but *not*
@@ -126,6 +137,9 @@ SecureTransport (macOS), and VAAPI (Linux) are used through the operating
 system's own interfaces. NVENC/NVDEC/CUVID and AMF are reached through
 header-only stubs (`nv-codec-headers`, `AMF`) that `dlopen`/`LoadLibrary` the
 vendor driver at runtime; no NVIDIA or AMD binary is redistributed here.
+Vulkan works the same way: the Vulkan loader (`vulkan-1.dll` /
+`libvulkan.so.1`) belongs to the user's GPU driver or OS and is opened at
+runtime; it is neither linked nor shipped.
 
 **On libva and libdrm.** VAAPI is genuinely a system component here, not a
 bundled one, and unusually so. `libva` is built from the pinned source purely

@@ -30,7 +30,7 @@
 # We deliberately do NOT enable --enable-cuda-nvcc / --enable-cuda-llvm.
 # Those are needed only to compile the CUDA *filters* (scale_cuda,
 # overlay_cuda, ...). Neither consumer uses one: TAS uses hwupload_cuda, and
-# ffmpeg-8.1.2/configure:3518 shows hwupload_cuda_filter_deps="ffnvcodec"
+# ffmpeg-9.0.2/configure:3577 shows hwupload_cuda_filter_deps="ffnvcodec"
 # only. Skipping nvcc removes the entire CUDA toolkit from the build
 # environment -- a large reproducibility and CI-time win.
 # If a --custom_encoder user ever needs scale_cuda, that is the flag to add,
@@ -43,15 +43,15 @@
 # (encodingSettings.py:172-192, :270-271); nelux's tests exercise h264_qsv
 # and hevc_qsv.
 #
-# configure:7291-7292 -- libmfx and libvpl are MUTUALLY EXCLUSIVE and
-# configure dies if both are given. configure:7309-7317 does
+# configure:7364-7365 -- libmfx and libvpl are MUTUALLY EXCLUSIVE and
+# configure dies if both are given. configure:7382-7390 does
 #     check_pkg_config libmfx "vpl >= 2.6" ... || die "ERROR: libvpl >= 2.6 not found"
 # with NO non-pkg-config fallback, so PKG_CONFIG_PATH must include the
 # installed vpl.pc even on Windows. scripts/build-ffmpeg.sh sets it.
 #
 # Note that configure's libvpl branch *enables the internal `libmfx` config
 # symbol* (the first argument to check_pkg_config is the name it enables), so
-# vp9_qsv_encoder_deps="libmfx MFX_CODEC_VP9" (configure:3672) is satisfied by
+# vp9_qsv_encoder_deps="libmfx MFX_CODEC_VP9" (configure:3727) is satisfied by
 # libvpl -- that is what makes TAS's `qsv_vp9` preset buildable.
 --enable-libvpl                               # both
 
@@ -90,9 +90,24 @@
 # TLS
 # ===========================================================================
 # Schannel -- the OS implementation. Zero extra dependencies, and it sidesteps
-# the GPLv2 problem entirely: configure:7493 makes OpenSSL >= 3.0 require
+# the GPLv2 problem entirely: configure:7552 makes OpenSSL >= 3.0 require
 # --enable-version3, which we refuse (see ffmpeg.flags).
 # Needed because yt-dlp delegates some fragmented (HLS/DASH) downloads to
 # ffmpeg (Theanimescripter/src/ytdlp.py:184,202) and TAS-AdobeEdition streams
 # fragmented MP4 over HTTP (MediaBrowserTab.tsx:486-498).
 --enable-schannel                             # TAS
+
+# ===========================================================================
+# Vulkan -- hwcontext, Vulkan Video decode (h264/hevc/av1/vp9 + more) and
+# encode (h264/hevc/av1), and the *_vulkan compute filters.
+# ===========================================================================
+# Like ffnvcodec and AMF, this is a runtime dlopen and NOT a link dependency:
+# libavutil/hwcontext_vulkan.c:650-682 loads vulkan-1.dll on first use, so a
+# machine with no Vulkan driver still loads every DLL/so and simply cannot
+# create a Vulkan device. Headers, SPIRV-Headers and the glslang shader
+# compiler are pinned in versions.lock VULKAN_HEADERS_* / SPIRV_HEADERS_* /
+# GLSLANG_*; scripts/build-ffmpeg.sh passes --glslc= so configure uses OUR
+# glslang. Without a shader compiler configure would still accept this flag
+# and silently drop every *_vulkan filter -- verify-output.sh catches that.
+# All components are default-on, so this one flag is the whole opt-in.
+--enable-vulkan                               # owner

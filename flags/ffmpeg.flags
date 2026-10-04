@@ -23,6 +23,8 @@
 #     # both   -- required by both
 #     # union  -- required by neither today; included under the union rule
 #                 because it is free and a consumer could plausibly reach it
+#     # owner  -- requested directly by the owner rather than reached by a
+#                 consumer (Vulkan, 2026-10-04)
 #
 # UNION RULE (owner's decision): if either consumer needs a feature, it is in.
 # Do not trim this file for size. The decisive argument is
@@ -47,12 +49,12 @@
 
 # We deliberately do NOT pass --enable-version3.
 #
-# ffmpeg-8.1.2/configure:2007-2016 defines EXTERNAL_LIBRARY_VERSION3_LIST as
+# ffmpeg-9.0.2/configure:2051-2060 defines EXTERNAL_LIBRARY_VERSION3_LIST as
 # exactly: gmp, libaribb24, liblensfun, libopencore_amrnb, libopencore_amrwb,
 # libvo_amrwbenc, mbedtls, rkmpp. We enable NONE of them, so nothing forces
 # version3 on us.
 #
-# configure:4773 reads:
+# configure:4836 reads:
 #     enabled version3 && { enabled gpl && enable gplv3 || enable lgplv3; }
 # so --enable-version3 together with --enable-gpl would relicense the whole
 # binary as GPLv3. Staying off it keeps the output at "GPL v2 or later" --
@@ -61,7 +63,7 @@
 # explicit `GPLv2-only` branch, so this is not hypothetical.
 #
 # Consequence, enforced in the per-OS files: we must NOT enable OpenSSL >= 3.0.
-# configure:7493 hard-fails that combination:
+# configure:7552 hard-fails that combination:
 #     { enabled gplv3 || ! enabled gpl || enabled nonfree
 #       || die "ERROR: OpenSSL >=3.0.0 requires --enable-version3"; }
 
@@ -121,7 +123,7 @@
 #     archive and :316-335 FLATTENS its `bin/*` into <root>/ffmpeg_shared/,
 #     after which src/cli/startup.py:60-79 calls os.add_dll_directory() on
 #     that folder *specifically so nelux can delay-load from there*.
-# NOTE: on mingw, configure:6142-6145 force-disables static when shared is
+# NOTE: on mingw, configure:6225-6228 force-disables static when shared is
 # enabled ("Cannot build both shared and static libs when using dllimport"),
 # so --disable-static is the honest, explicit spelling of what happens anyway.
 --enable-shared                               # both
@@ -156,7 +158,7 @@
 --disable-autodetect                          # both
 
 # *** TRAP -- READ BEFORE EDITING ***
-# --disable-autodetect turns off AUTODETECT_LIBS, which ffmpeg-8.1.2/configure
+# --disable-autodetect turns off AUTODETECT_LIBS, which ffmpeg-9.0.2/configure
 # defines as
 #     EXTERNAL_AUTODETECT_LIBRARY_LIST + HWACCEL_AUTODETECT_LIBRARY_LIST
 #     + THREADS_LIST

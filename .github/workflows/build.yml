@@ -399,7 +399,7 @@ jobs:
 
             **One build serves both consumers** (nelux and TheAnimeScripter).
             There is no `--build-suffix`, so the libraries are named
-            `avcodec-62.dll` etc. That is safe **only** while both consumers
+            `avcodec-63.dll` etc. That is safe **only** while both consumers
             use the *same* release — identical builds can be co-loaded in one
             process, mismatched ones cannot, and nothing at the OS level
             prevents it.

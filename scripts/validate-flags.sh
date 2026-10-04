@@ -34,7 +34,7 @@ mkdir -p "$CACHE"
 #
 # `--help` alone is NOT sufficient. configure accepts --enable-X for every
 # identifier in its CONFIG_LIST, and several of those are never printed by
-# --help: `--enable-cuda` is valid (configure:3336 `cuda_deps="ffnvcodec"`,
+# --help: `--enable-cuda` is valid (configure:3393 `cuda_deps="ffnvcodec"`,
 # and cuda is in HWACCEL_AUTODETECT_LIBRARY_LIST) but --help only shows
 # --disable-cuda-llvm and --enable-cuda-nvcc. So we ALSO harvest every
 # identifier from configure's own `*_LIST="..."` blocks, translating `_` to
@@ -57,7 +57,7 @@ mkdir -p "$CACHE"
 #     ffmpeg.flags: UNKNOWN OPTION  --disable-debug
 # on both macOS legs while the SAME script, in the SAME run, passed on
 # ubuntu-latest for windows, linux AND macos. --disable-debug is a real
-# option (ffmpeg-8.1.2/configure:504); the validator was wrong.
+# option (ffmpeg-9.0.2/configure:503); the validator was wrong.
 #
 # `--enable-` and `--disable-` are mutually exclusive prefixes, so applying
 # both strips in sequence is equivalent to the alternation and needs nothing
@@ -89,7 +89,7 @@ fi
 # reachable through EXACTLY ONE of the two extraction paths -- so a probe
 # that survives cannot be masking a broken path. Measured against 8.1.2:
 #   debug, stripping  ONLY from `configure --help`. Both live in
-#                     CMDLINE_SELECT (configure:2806-2821), and the awk
+#                     CMDLINE_SELECT (configure:2859-2875), and the awk
 #                     harvest deliberately does not match that block: it
 #                     looks for `*_LIST="` and this one is CMDLINE_SELECT.
 #                     If the --help path breaks, these two vanish -- which is

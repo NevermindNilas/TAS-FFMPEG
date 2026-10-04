@@ -70,10 +70,10 @@ RUN dnf -y install dnf-plugins-core epel-release \
 # meson/ninja : dav1d, libvmaf, openh264
 # autotools   : zimg, x264, libvpx, and the gmp/nettle/gnutls TLS stack
 # pkgconf     : *** REQUIRED, NOT OPTIONAL. *** Every external-library check
-#               in ffmpeg-8.1.2/configure that we enable is require_pkg_config
-#               (libx264 :7426, libx265 :7432, libopenh264 :7343, libvmaf
-#               :7391, libzimg :7441, dav1d :7251, SvtAv1Enc :7377, aom :7235,
-#               vpx :7402, opus :7352, libvpl :7309) and require_* DIES on
+#               in ffmpeg-9.0.2/configure that we enable is require_pkg_config
+#               (libx264 :7493, libx265 :7499, libopenh264 :7410, libvmaf
+#               :7458, libzimg :7508, dav1d :7334, SvtAv1Enc :7443, aom :7321,
+#               vpx :7469, opus :7419, libvpl :7382) and require_* DIES on
 #               failure. With no pkg-config binary on PATH, EVERY one of them
 #               fails and configure aborts on the first. The manylinux base
 #               image is not guaranteed to carry it, and `dnf install` of a

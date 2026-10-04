@@ -17,6 +17,8 @@
 #
 # Per-target skips, each mirroring a flag in flags/ or an OS-provided library:
 #   macOS         no libvpl, no AMF, no nv-codec-headers (no runtime exists)
+#   macOS         no Vulkan-Headers / SPIRV-Headers / glslang (no Vulkan
+#                 driver ships with macOS; see versions.lock VULKAN_*)
 #   linux/arm64   no libvpl, no AMF                      (no aarch64 runtime)
 #   non-Linux     no gmp/nettle/GnuTLS  (Schannel / SecureTransport instead)
 #   macOS         no bzip2              (bzlib.h is in the SDK, libbz2 in /usr/lib)
@@ -31,7 +33,7 @@
 # macos-arm64, macos-x86_64.
 #
 # THE SKIPS AND THE FLAG FILES MUST STAY IN STEP. libvpl is the sharp edge:
-# configure:7309-7317 `die`s if --enable-libvpl is passed and vpl.pc is
+# configure:7382-7390 `die`s if --enable-libvpl is passed and vpl.pc is
 # missing, so a skip here without the matching --disable-libvpl in
 # flags/ffmpeg.<os>.<arch>.flags aborts the build outright.
 # ---------------------------------------------------------------------------
@@ -73,14 +75,14 @@ fi
 # Apple removed the libstdc++ stub in Xcode 10 (2018). On macOS the C++
 # runtime is libc++, and ANY link line containing -lstdc++ fails outright:
 #     ld: library 'stdc++' not found
-# ffmpeg-8.1.2/configure:7432 checks x265 with `require_pkg_config`, which
+# ffmpeg-9.0.2/configure:7499 checks x265 with `require_pkg_config`, which
 # dies on failure -- so a single -lstdc++ anywhere in the .pc chain aborts
 # BOTH macOS legs at configure time. x265's own CMake writes -lstdc++ into
 # x265.pc's Libs.private on a static build, and build-deps.sh used to sed a
 # SECOND one into Libs on top of that.
 #
-# Note the ordering trap that hid this: configure checks libopenh264 at :7343
-# and libvmaf at :7391, both BEFORE libx265 at :7432. Any of the three can
+# Note the ordering trap that hid this: configure checks libopenh264 at :7410
+# and libvmaf at :7458, both BEFORE libx265 at :7499. Any of the three can
 # abort the build; today they merely happen to be checked in an order where
 # x265 fails first.
 #
@@ -118,8 +120,8 @@ cxx_runtime_lib() {
 #     ERROR: x265 not found using pkg-config
 # which names neither the file nor the build step that should have produced
 # it. Every .pc passed to this function is checked by a `require_pkg_config`
-# in configure -- libx265 at :7432, libopenh264 at :7343, libvmaf at :7391,
-# libzimg at :7441 -- and every one of those libraries is enabled
+# in configure -- libx265 at :7499, libopenh264 at :7410, libvmaf at :7458,
+# libzimg at :7508 -- and every one of those libraries is enabled
 # unconditionally in flags/ffmpeg.flags on all five targets. So there is no
 # case where a missing one of these is survivable; failing here is strictly
 # better information, delivered ~10 minutes earlier.
@@ -200,15 +202,15 @@ build_zlib() {
 #
 # *** liblzma IS NOT IN THAT CATEGORY, AND ASSUMING IT WAS COST A CI ROUND. ***
 # macOS ships /usr/lib/liblzma.5.dylib for its own tools but publishes NO
-# lzma.h in the SDK, so configure:7188
+# lzma.h in the SDK, so configure:7273
 #     enabled lzma && check_lib lzma lzma.h lzma_version_number -llzma
 # cannot even compile its probe. lzma is in EXTERNAL_AUTODETECT_LIBRARY_LIST
-# (configure:1977) and flags/ffmpeg.flags:182 REQUESTS it, so the generic
-# guard at configure:8286-8287
+# (configure:2018) and flags/ffmpeg.flags:182 REQUESTS it, so the generic
+# guard at configure:8360-8361
 #     requested $lib && ! enabled $lib && die "ERROR: $lib requested but not found"
 # turns that into a hard abort AFTER every dependency has been built:
 #     ERROR: lzma requested but not found
-# Note bzlib is checked first in that same loop (:7187, and it sits above
+# Note bzlib is checked first in that same loop (:7272, and it sits above
 # lzma in the list) and passed, which is what proves the header -- not the
 # dylib -- is what macOS is missing.
 #
@@ -317,14 +319,83 @@ build_amf() {
 }
 
 # ===========================================================================
+# Vulkan -- Windows + Linux only (scripts/lib/common.sh vulkan_target).
+#
+# Three pieces, none of them linked:
+#   Vulkan-Headers  header-only. NO vulkan.pc is written, deliberately:
+#                   configure:7805 tries pkg-config first and falls back to a
+#                   check_cpp_condition on the include path (:7806), which
+#                   finds these via --extra-cflags=-I$PREFIX_DIR/include.
+#   SPIRV-Headers   header-only. Optional to configure (it only warns), so
+#                   verify-output.sh asserts HAVE_SPIRV_UNIFIED1_SPIRV_H.
+#   glslang         a HOST tool. FFmpeg 9.0 compiles its GLSL compute
+#                   shaders to SPIR-V at build time; build-ffmpeg.sh passes
+#                   this binary as --glslc=. Installed into $HOST_TOOLS_DIR,
+#                   which is NOT on the -I/-L path, so its own static
+#                   libraries and headers cannot leak into FFmpeg's link.
+# The loader itself (vulkan-1.dll / libvulkan.so.1) is dlopen'd at runtime by
+# libavutil/hwcontext_vulkan.c and is never built or shipped here.
+# ===========================================================================
+build_vulkan_headers() {
+  vulkan_target "$OS" || { log "skipping Vulkan-Headers (no Vulkan on $OS)"; return; }
+  have_stamp vulkan_headers "$VULKAN_HEADERS_COMMIT" && { log "Vulkan-Headers up to date"; return; }
+  log "installing Vulkan-Headers $VULKAN_HEADERS_TAG"
+  mkdir -p "$PREFIX_DIR/include"
+  rm -rf "$PREFIX_DIR/include/vulkan" "$PREFIX_DIR/include/vk_video"
+  # vk_video/ is not optional: vulkan_core.h includes the vk_video/*.h codec
+  # headers, which is what Vulkan Video decode/encode compiles against.
+  cp -r "$SRC_DIR/Vulkan-Headers/include/vulkan" \
+        "$SRC_DIR/Vulkan-Headers/include/vk_video" "$PREFIX_DIR/include/"
+  set_stamp vulkan_headers "$VULKAN_HEADERS_COMMIT"
+}
+
+build_spirv_headers() {
+  vulkan_target "$OS" || { log "skipping SPIRV-Headers (no Vulkan on $OS)"; return; }
+  have_stamp spirv_headers "$SPIRV_HEADERS_COMMIT" && { log "SPIRV-Headers up to date"; return; }
+  log "installing SPIRV-Headers $SPIRV_HEADERS_TAG"
+  mkdir -p "$PREFIX_DIR/include"
+  rm -rf "$PREFIX_DIR/include/spirv"
+  cp -r "$SRC_DIR/SPIRV-Headers/include/spirv" "$PREFIX_DIR/include/"
+  set_stamp spirv_headers "$SPIRV_HEADERS_COMMIT"
+}
+
+build_glslang() {
+  vulkan_target "$OS" || { log "skipping glslang (no Vulkan on $OS)"; return; }
+  local bin
+  bin="$(glslang_bin "$OS")"
+  if have_stamp glslang "$GLSLANG_COMMIT" && [ -x "$bin" ]; then
+    log "glslang up to date"; return
+  fi
+  log "building glslang $GLSLANG_TAG (host shader compiler)"
+  rm -rf "$WORK_DIR/glslang"
+  # ENABLE_OPT=OFF: the optimiser needs SPIRV-Tools, which glslang otherwise
+  # fetches itself (BUILD_EXTERNAL) -- an unpinned download. FFmpeg passes no
+  # optimisation flag to glslang in a non-`--enable-small` build
+  # (configure:7815 glslc_opt_speed=""), so nothing is lost.
+  # HLSL is not an input FFmpeg uses; tests and PCH only cost build time.
+  cmake -S "$SRC_DIR/glslang" -B "$WORK_DIR/glslang" -G Ninja \
+    -DCMAKE_INSTALL_PREFIX="$HOST_TOOLS_DIR" -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF -DBUILD_EXTERNAL=OFF -DENABLE_OPT=OFF \
+    -DALLOW_EXTERNAL_SPIRV_TOOLS=OFF -DENABLE_HLSL=OFF -DENABLE_PCH=OFF \
+    -DGLSLANG_TESTS=OFF -DENABLE_GLSLANG_BINARIES=ON -DGLSLANG_ENABLE_INSTALL=ON
+  cmake --build "$WORK_DIR/glslang" -j "$JOBS"
+  cmake --install "$WORK_DIR/glslang"
+  # configure probes the compiler with `-v` and, on failure, SILENTLY drops
+  # spirv_compiler -- so prove here, loudly, that the binary exists and runs.
+  [ -x "$bin" ] || die "glslang built but $bin is missing -- check the install layout of $GLSLANG_TAG"
+  "$bin" -v >/dev/null || die "$bin does not run on this host; FFmpeg's configure would silently build without any *_vulkan filter"
+  set_stamp glslang "$GLSLANG_COMMIT"
+}
+
+# ===========================================================================
 # libvpl -- the oneVPL DISPATCHER only. Provides vpl.pc, which
-# ffmpeg configure:7309-7317 requires (>= 2.6) with NO fallback.
+# ffmpeg configure:7382-7390 requires (>= 2.6) with NO fallback.
 # ===========================================================================
 build_libvpl() {
   [ "$OS" = "macos" ] && { log "skipping libvpl (no oneVPL runtime on macOS)"; return; }
   # linux/aarch64: no Intel GPU, no aarch64 oneVPL runtime. This skip MUST
   # stay in step with the --disable-libvpl in flags/ffmpeg.linux.arm64.flags:
-  # configure:7309-7317 `die`s outright if libvpl is enabled and vpl.pc is
+  # configure:7382-7390 `die`s outright if libvpl is enabled and vpl.pc is
   # absent, so building the dispatcher without the flag (or vice versa) is a
   # hard configure failure rather than a degraded build.
   [ "$OS" = "linux" ] && [ "$ARCH" = "arm64" ] && { log "skipping libvpl (no aarch64 oneVPL runtime)"; return; }
@@ -446,9 +517,9 @@ dynamic symbol table). Install binutils."
 pc_add_ldl() {
   local pc="$1"
   [ -f "$pc" ] || die "$(basename "$pc") was not installed into $(dirname "$pc").
-ffmpeg-8.1.2/configure:7667-7676 finds both libva and libva-drm through
+ffmpeg-9.0.2/configure:7730-7739 finds both libva and libva-drm through
 pkg-config and there is no fallback; a missing .pc here means vaapi silently
-fails to configure, and configure:8285-8287 then hard-dies because
+fails to configure, and configure:8359-8361 then hard-dies because
 --enable-vaapi was requested."
   grep -q '^Libs:' "$pc" || die "$(basename "$pc") has no Libs: line to extend"
   grep -q -- '-ldl' "$pc" && return 0   # idempotent
@@ -588,7 +659,7 @@ build_x264() {
 # empty: CMakeLists.txt:1041-1043 aborts configure outright wherever a
 # resource compiler exists (i.e. MinGW/Windows), and CMakeLists.txt:1113
 # silently skips generating and installing x265.pc everywhere, which then
-# kills FFmpeg's configure:7432 require_pkg_config. A `git init` + `fetch
+# kills FFmpeg's configure:7499 require_pkg_config. A `git init` + `fetch
 # --depth 1 <sha>` checkout has no tags at all, so scripts/lib/common.sh's
 # restore_pin_tag puts X265_TAG back as a local tag. Read its comment before
 # changing anything about how sources are fetched.
@@ -632,7 +703,7 @@ build_x265() {
   # x265's CMake writes `-lstdc++` into x265.pc's Libs.private for a static
   # build. That is correct on Linux, fatal on macOS (Xcode 10 removed the
   # libstdc++ stub, so ld dies with "library 'stdc++' not found" and
-  # configure:7432's require_pkg_config turns that into a hard abort), and
+  # configure:7499's require_pkg_config turns that into a hard abort), and
   # wrong on Windows (GNU ld resolves -lstdc++ to libstdc++.dll.a and the DLLs
   # grow an import on libstdc++-6.dll). pc_fix_cxx rewrites it to whatever
   # this platform's C++ runtime actually is.
@@ -1003,7 +1074,7 @@ runtime with 'no such built-in model'. Check that xxd is on PATH."
   fi
   log "libvmaf: built-in models are embedded"
   # Same treatment as openh264: libvmaf's build pulls in C++ translation
-  # units and meson emits no C++ runtime in Libs.private. configure:7391
+  # units and meson emits no C++ runtime in Libs.private. configure:7458
   # checks it with require_pkg_config -- also BEFORE x265 -- so a missing
   # runtime aborts the build there. Harmless if libvmaf happens to be pure C
   # on a given release: naming the platform's C++ runtime pulls nothing out of
@@ -1016,12 +1087,12 @@ runtime with 'no such built-in model'. Check that xxd is on PATH."
 # GnuTLS + its two dependencies -- LINUX ONLY.
 #
 # Windows uses Schannel and macOS SecureTransport (both system frameworks,
-# zero extra dependencies). Linux has no such thing, and ffmpeg-8.1.2's
+# zero extra dependencies). Linux has no such thing, and ffmpeg-9.0.2's
 # configure rejects every other backend in a GPL build:
-#     :7382-7383  LibreSSL       -> "incompatible with the gpl"
-#     :7493       OpenSSL >= 3.0 -> "requires --enable-version3"
-#     :7494       OpenSSL <  3.0 -> "incompatible with the gpl"
-#     :2007-2016  mbedtls is in EXTERNAL_LIBRARY_VERSION3_LIST
+#     :7449-7450  LibreSSL       -> "incompatible with the gpl"
+#     :7552       OpenSSL >= 3.0 -> "requires --enable-version3"
+#     :7553       OpenSSL <  3.0 -> "incompatible with the gpl"
+#     :2051-2060  mbedtls is in EXTERNAL_LIBRARY_VERSION3_LIST
 # so GnuTLS is the only option. See flags/ffmpeg.linux.flags for WHY TLS is
 # required at all (yt-dlp's FFmpegFD fallback runs OUR ffmpeg against an
 # https m3u8 URL -- Theanimescripter/src/ytdlp.py:184,202).
@@ -1109,7 +1180,7 @@ build_zimg() {
     ./configure --prefix="$PREFIX_DIR" --enable-static --disable-shared --with-pic
     make -j"$JOBS" && make install )
   # zimg is C++ and zimg.pc.in carries -lstdc++ in Libs.private; see
-  # pc_fix_cxx. configure:7441 checks it with require_pkg_config.
+  # pc_fix_cxx. configure:7508 checks it with require_pkg_config.
   pc_fix_cxx "$PREFIX_DIR/lib/pkgconfig/zimg.pc"
   set_stamp zimg "$ZIMG_COMMIT"
 }
@@ -1122,6 +1193,9 @@ build_libiconv
 build_nvcodec
 build_amf
 build_libvpl
+build_vulkan_headers
+build_spirv_headers
+build_glslang
 # libdrm before libva: libva/meson.build:88 requires libdrm >= 2.4.75 and both
 # resolve through $PREFIX_DIR/lib/pkgconfig. Both no-op off linux/x86_64.
 build_libdrm

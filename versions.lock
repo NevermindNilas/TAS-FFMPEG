@@ -27,38 +27,39 @@
 # Release tarball is the primary source (deterministic, no git needed).
 # The git tag/commit are recorded so the exact tree can be reconstructed and
 # so `git describe` inside the source archive is meaningful.
-FFMPEG_VERSION=8.1.2
-FFMPEG_TAG=n8.1.2
-# `git rev-parse n8.1.2^{}` -- the commit the annotated tag points at.
-FFMPEG_COMMIT=38b88335f99e76ed89ff3c93f877fdefce736c13
-# The annotated tag object itself (PGP-signed by Michael Niedermayer,
-# key B1 8E 89 28 B3 94 8D 64). Verified "good signature" via the GitHub
-# mirror's tag verification on 2026-08-04.
-FFMPEG_TAG_OBJECT=1c2c67c0b9f7f66ab32c19dcf7f227bcd290aa4c
-FFMPEG_URL=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+FFMPEG_VERSION=9.0.2
+FFMPEG_TAG=n9.0.2
+# `git rev-parse n9.0.2^{}` -- the commit the annotated tag points at.
+FFMPEG_COMMIT=946fcce07b6dcd0331c8cc609192aeff5e1924f8
+# The annotated tag object itself, from `git ls-remote` against the GitHub
+# mirror on 2026-10-04.
+FFMPEG_TAG_OBJECT=ce8f11b9fac4cd7ccfb41ca7c01bc17f5cda8cc3
+FFMPEG_URL=https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
 # VERIFIED: computed locally with sha256sum on the file downloaded from
-# ffmpeg.org on 2026-08-04 (11,710,924 bytes).
+# ffmpeg.org on 2026-10-04 (12,040,788 bytes). The detached signature
+# verified "Good signature" against FCF986EA...D67658D8 the same day.
 # NOTE: ffmpeg.org publishes .asc (PGP) signatures, NOT .sha256 files -- there
 # is no upstream SHA256 to cross-check against. scripts/fetch.sh therefore
-# ALSO verifies ffmpeg-8.1.2.tar.xz.asc against the FFmpeg release key when
+# ALSO verifies ffmpeg-9.0.2.tar.xz.asc against the FFmpeg release key when
 # gpg is available. Treat the SHA256 below as "pinned by us", and the PGP
 # signature as the upstream trust root.
-FFMPEG_SHA256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
-FFMPEG_SIG_URL=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz.asc
+FFMPEG_SHA256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+FFMPEG_SIG_URL=https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz.asc
 # FFmpeg release signing key fingerprint (Michael Niedermayer).
 FFMPEG_GPG_FPR=FCF986EA15E6E293A5644F10B4322F04D67658D8
 
 # SONAME majors produced by this FFmpeg. Asserted by scripts/verify-output.sh
 # after every build: if one of these changes, downstream consumers that
 # hardcode a DLL/so name break, so the build must fail loudly.
-# Read from lib*/version_major.h in the 8.1.2 tarball.
-SONAME_AVCODEC=62
-SONAME_AVDEVICE=62
-SONAME_AVFILTER=11
-SONAME_AVFORMAT=62
-SONAME_AVUTIL=60
-SONAME_SWRESAMPLE=6
-SONAME_SWSCALE=9
+# Read from lib*/version_major.h (libavutil/version.h for avutil) in the
+# 9.0.2 tarball. Every major moved from 8.1.2 -- 9.0 is an ABI break.
+SONAME_AVCODEC=63
+SONAME_AVDEVICE=63
+SONAME_AVFILTER=12
+SONAME_AVFORMAT=63
+SONAME_AVUTIL=61
+SONAME_SWRESAMPLE=7
+SONAME_SWSCALE=10
 
 # ===========================================================================
 # nv-codec-headers (NVENC / NVDEC / CUVID stub headers)
@@ -70,15 +71,14 @@ SONAME_SWSCALE=9
 #   n12.1.14.0  -> Linux >= 530.41.03 / Windows >= 531.61   <-- CHOSEN
 #   n13.0.19.0  -> Linux >= 570.0     / Windows >= 570.0
 #
-# ffmpeg-8.1.2/configure:7126-7130 accepts, in order of preference:
+# ffmpeg-9.0.2/configure:7214-7216 accepts, in order of preference:
 #   ffnvcodec >= 12.1.14.0            (unbounded upper -- 13.x also matches)
 #   ffnvcodec >= 12.0.16.1  < 12.1
 #   ffnvcodec >= 11.1.5.3   < 12.0
-#   ffnvcodec >= 11.0.10.3  < 11.1
-#   ffnvcodec >= 8.1.24.15  < 8.2
+# (9.0 dropped the 11.0.x and 8.1.x brackets 8.1.2 still accepted.)
 #
 # We choose n12.1.14.0: it is the lowest version in FFmpeg's *preferred*
-# bracket, so we get every NVENC/NVDEC feature FFmpeg 8.1.2 knows how to use
+# bracket, so we get every NVENC/NVDEC feature FFmpeg 9.0.2 knows how to use
 # (incl. AV1 NVENC, which needs >= 12.0), while keeping the driver floor at
 # 531.61 (Mar 2023) instead of 570.x (Jan 2025). Bumping to n13.0.19.0 would
 # cut off every user on a 2023-2024 driver for no feature nelux or TAS uses.
@@ -94,8 +94,8 @@ NVCODEC_DRIVER_MIN_WINDOWS=531.61
 # x264 has no release tags upstream; upstream ships `stable` and `master`
 # branches only. We pin the exact commit. As of 2026-08-04 `master` and the
 # `GPLv2-only` branch both point at 0480cb05 (committed 2025-09-10) and
-# `stable` at b35605ac (2025-06-08). We take master: FFmpeg 8.1.2
-# configure:7426-7431 wants X264_BUILD >= 155 (>= 158 without --enable-gpl
+# `stable` at b35605ac (2025-06-08). We take master: FFmpeg 9.0.2
+# configure:7493-7498 wants X264_BUILD >= 155 (>= 158 without --enable-gpl
 # path variations, >= 163 for HDR10 signalling); master satisfies all three,
 # `stable` predates some of the HDR10 work.
 # LICENSE: GPL-2.0 (COPYING is the plain GPLv2 text). See README.md#version3.
@@ -105,7 +105,7 @@ X264_REPO=https://code.videolan.org/videolan/x264.git
 
 # x265 canonical repo is Bitbucket (the github.com/videolan/x265 mirror is
 # abandoned at 3.4 and MUST NOT be used).
-# 4.2 is the newest release tag. configure:7432-7433 needs X265_BUILD >= 89;
+# 4.2 is the newest release tag. configure:7499-7500 needs X265_BUILD >= 89;
 # 4.2 is build 215.
 # SIZE WARNING: multilib (8+10+12 bit) x265 is ~22.7 MB of the Windows
 # avcodec -- the single largest line item. It stays: both consumers use
@@ -120,21 +120,21 @@ X265_REPO=https://bitbucket.org/multicoreware/x265_git.git
 # ===========================================================================
 # dav1d -- the fast AV1 *decoder*. nelux's decoder preference chain tries
 # libdav1d first (src/Nelux/backends/Decoder.cpp).
-# configure:7251 requires dav1d >= 1.0.0.
+# configure:7334 requires dav1d >= 1.0.0.
 DAV1D_TAG=1.5.4
 DAV1D_COMMIT=54706fc6bc0cdecab7e9593974a4039cc038fca7
 DAV1D_REPO=https://code.videolan.org/videolan/dav1d.git
 
 # SVT-AV1 -- the fast AV1 *encoder*. Upstream moved to gitlab.com; the
 # github.com/AOMediaCodec/SVT-AV1 mirror has no tags and must not be used.
-# configure:7377 requires SvtAv1Enc >= 0.9.0.
+# configure:7443 requires SvtAv1Enc >= 0.9.0.
 SVTAV1_TAG=v4.2.0
 SVTAV1_COMMIT=9292ec8e32bce26f781f277ec8739b53426c4300
 SVTAV1_REPO=https://gitlab.com/AOMediaCodec/SVT-AV1.git
 
 # libaom -- reference AV1 codec. Kept for `libaom-av1` (nelux tests it, and
 # it is 2nd in nelux's decoder preference chain after libdav1d).
-# configure:7235 requires aom >= 2.0.0.
+# configure:7321 requires aom >= 2.0.0.
 # SHA is the *peeled* commit (refs/tags/v3.14.1^{}).
 AOM_TAG=v3.14.1
 AOM_COMMIT=03087864cf4bea6abb0d28f95cf7843511413d8f
@@ -143,7 +143,7 @@ AOM_REPO=https://aomedia.googlesource.com/aom
 # ===========================================================================
 # VP8/VP9
 # ===========================================================================
-# configure:7402-7414 requires vpx >= 1.4.0.
+# configure:7469-7481 requires vpx >= 1.4.0.
 VPX_TAG=v1.16.0
 VPX_COMMIT=1024874c5919305883187e2953de8fcb4c3d7fa6
 VPX_REPO=https://github.com/webmproject/libvpx.git
@@ -157,7 +157,7 @@ VPX_REPO=https://github.com/webmproject/libvpx.git
 #     [0:v][1:v]libvmaf=feature='name=psnr|name=float_ssim'
 # and RAISES at :198 if it fails. It pytest.skip()s only when ffmpeg/ffprobe
 # are missing (:171,:221) -- a missing libvmaf filter is a FAILURE.
-# configure:7391 requires pkg-config "libvmaf >= 2.0.0".
+# configure:7458 requires pkg-config "libvmaf >= 2.0.0".
 # The meson project lives in the repo's libvmaf/ subdirectory. Built with
 # -Denable_float=true (needed by the float_ssim feature the test asks for)
 # and built_in_models left at its default, so no runtime .json model files
@@ -171,7 +171,7 @@ VMAF_REPO=https://github.com/Netflix/vmaf.git
 # Audio
 # ===========================================================================
 # libopus -- TAS muxes Opus audio (src/io/ffmpegSettings.py).
-# configure:7352 has no version floor, but opus_multistream_surround_encoder_create
+# configure:7419 has no version floor, but opus_multistream_surround_encoder_create
 # needs >= 1.1.
 OPUS_TAG=v1.6.1
 OPUS_COMMIT=22244de5a79bd1d6d623c32e72bf1954b56235be
@@ -196,7 +196,7 @@ OPUS_REPO=https://github.com/xiph/opus.git
 # Nelux/src/Nelux/backends/Encoder.cpp:390.
 #
 # LAME has no git upstream, so this one is a verified tarball.
-# LICENSE: LGPL-2.1-or-later. configure:7345 does a plain `require`, NOT
+# LICENSE: LGPL-2.1-or-later. configure:7398 does a plain `require`, NOT
 # pkg-config -- LAME installs no .pc file.
 LAME_VERSION=3.100
 LAME_URL=https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz,https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download
@@ -209,7 +209,7 @@ OGG_TAG=v1.3.6
 OGG_COMMIT=be05b13e98b048f0b5a0f5fa8ce514d56db5f822
 OGG_REPO=https://github.com/xiph/ogg.git
 
-# LICENSE: BSD-3-Clause. configure:7455 requires pkg-config vorbis + vorbisenc.
+# LICENSE: BSD-3-Clause. configure:7462-7463 requires pkg-config vorbis + vorbisenc.
 VORBIS_TAG=v1.3.7
 VORBIS_COMMIT=0657aee69dec8508a0011f47f3b69d7538e9d262
 VORBIS_REPO=https://github.com/xiph/vorbis.git
@@ -219,7 +219,7 @@ VORBIS_REPO=https://github.com/xiph/vorbis.git
 # ===========================================================================
 # libzimg -- backs the `zscale` filter, which TAS uses for colour-managed
 # scaling (src/io/ffmpegSettings.py:~797). Required by TAS; shipped for both.
-# configure:7441 requires zimg >= 2.7.0.
+# configure:7508 requires zimg >= 2.7.0.
 ZIMG_TAG=release-3.0.6
 ZIMG_COMMIT=f819b14e8f39d1282400b0d9543e8ef73c1b2bbd
 ZIMG_REPO=https://github.com/sekrit-twc/zimg.git
@@ -285,7 +285,7 @@ FRIBIDI_TAG=v1.0.16
 FRIBIDI_COMMIT=68162babff4f39c4e2dc164a5e825af93bda9983
 FRIBIDI_REPO=https://github.com/fribidi/fribidi.git
 
-# configure:7290 requires pkg-config "libass >= 0.11.0".
+# configure:7329 requires pkg-config "libass >= 0.11.0".
 LIBASS_TAG=0.17.5
 LIBASS_COMMIT=4a05d8127f525943ebf45fdc6497c9e665947f0d
 LIBASS_REPO=https://github.com/libass/libass.git
@@ -295,12 +295,12 @@ LIBASS_REPO=https://github.com/libass/libass.git
 # ===========================================================================
 # READ THIS BEFORE "SIMPLIFYING" TO LibreSSL OR OpenSSL.
 #
-# ffmpeg-8.1.2/configure hard-rejects every other backend in a GPL build:
-#   :7382-7383  libtls  -> die "ERROR: LibreSSL is incompatible with the gpl"
-#   :7493       openssl >= 3.0 -> die "requires --enable-version3"
-#   :7494       openssl <  3.0 -> die "is incompatible with the gpl"
-#   :2007-2016  mbedtls is in EXTERNAL_LIBRARY_VERSION3_LIST -> forces GPLv3
-# GnuTLS is the ONLY remaining option: configure:7231 gates it on nothing but
+# ffmpeg-9.0.2/configure hard-rejects every other backend in a GPL build:
+#   :7449-7450  libtls  -> die "ERROR: LibreSSL is incompatible with the gpl"
+#   :7552       openssl >= 3.0 -> die "requires --enable-version3"
+#   :7553       openssl <  3.0 -> die "is incompatible with the gpl"
+#   :2051-2060  mbedtls is in EXTERNAL_LIBRARY_VERSION3_LIST -> forces GPLv3
+# GnuTLS is the ONLY remaining option: configure:7317 gates it on nothing but
 # pkg-config, and it is in neither the version3 nor the nonfree list.
 #
 # WHY WE NEED TLS AT ALL: Theanimescripter/src/ytdlp.py:184,202 point yt-dlp
@@ -332,7 +332,7 @@ NETTLE_VERSION=3.10.2
 NETTLE_URL=https://ftp.gnu.org/gnu/nettle/nettle-3.10.2.tar.gz
 NETTLE_SHA256=fe9ff51cb1f2abb5e65a6b8c10a92da0ab5ab6eaf26e7fc2b675c45f1fb519b5
 
-# configure:7231 has no version floor; 3.8.x is the current stable series.
+# configure:7317 has no version floor; 3.8.x is the current stable series.
 GNUTLS_VERSION=3.8.10
 GNUTLS_URL=https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.10.tar.xz,https://mirrors.dotsrc.org/gcrypt/gnutls/v3.8/gnutls-3.8.10.tar.xz
 GNUTLS_SHA256=db7fab7cce791e7727ebbef2334301c821d79a550ec55c9ef096b610b03eb6b7
@@ -341,11 +341,11 @@ GNUTLS_SHA256=db7fab7cce791e7727ebbef2334301c821d79a550ec55c9ef096b610b03eb6b7
 # Hardware acceleration SDKs (headers / dispatchers)
 # ===========================================================================
 # Intel oneVPL dispatcher -- provides the `vpl` pkg-config module.
-# ffmpeg-8.1.2/configure:7309-7317 does `check_pkg_config libmfx "vpl >= 2.6"`
+# ffmpeg-9.0.2/configure:7382-7390 does `check_pkg_config libmfx "vpl >= 2.6"`
 # and `die "ERROR: libvpl >= 2.6 not found"` -- there is NO non-pkg-config
 # fallback for --enable-libvpl, so PKG_CONFIG_PATH must point at the
 # installed vpl.pc on every platform, Windows included.
-# configure:7291-7292: `--enable-libmfx` and `--enable-libvpl` are mutually
+# configure:7364-7365: `--enable-libmfx` and `--enable-libvpl` are mutually
 # exclusive and configure dies if both are given. We use libvpl only.
 # v2023.4.0 exposes VPL API 2.10 (pkg-config `vpl` >= 2.6 satisfied).
 LIBVPL_TAG=v2023.4.0
@@ -357,6 +357,64 @@ LIBVPL_REPO=https://github.com/intel/libvpl.git
 AMF_TAG=v1.5.2
 AMF_COMMIT=eadd00804d5f7e5cd8c85d540073198312870776
 AMF_REPO=https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git
+
+# ---------------------------------------------------------------------------
+# Vulkan -- Windows + Linux (both arches). Not macOS: no Vulkan driver ships
+# with it, and MoltenVK has no Vulkan Video, so there is nothing to test on.
+# ---------------------------------------------------------------------------
+# NOTHING here is linked. libavutil/hwcontext_vulkan.c:650-682 dlopen()s the
+# loader at runtime (vulkan-1.dll / libvulkan.so.1) exactly like the NVIDIA
+# and AMF stubs, so a machine without Vulkan still loads FFmpeg fine and the
+# import / DT_NEEDED allowlists in scripts/verify-output.sh stay unchanged.
+#
+# All three repos are pinned to the SAME Vulkan SDK release tag, i.e. a set
+# Khronos tested together. The tags are lightweight, so _COMMIT is the tag's
+# own target (`git ls-remote`, 2026-10-04).
+#
+# Vulkan-Headers -- header-only. ffmpeg-9.0.2/configure:7804-7806 needs
+# VK_VERSION_1_3 with VK_HEADER_VERSION >= 277 (no vulkan.pc required: the
+# fallback is a plain check_cpp_condition on the include path), and
+# configure:7849-7850 enables `vulkan_1_4` -- which vp9_vulkan_hwaccel_deps
+# (configure:3547) requires -- only for VK_VERSION_1_4 with VK_HEADER_VERSION
+# >= 317. 1.4.363 clears both.
+# LICENSE: every header we compile in is SPDX "Apache-2.0 OR MIT"; we take
+# MIT, which keeps the binaries GPL-2.0-or-later.
+VULKAN_HEADERS_TAG=vulkan-sdk-1.4.363.0
+VULKAN_HEADERS_COMMIT=6802bb4733b63ed5efd3adb308a6c885ef180ea1
+VULKAN_HEADERS_REPO=https://github.com/KhronosGroup/Vulkan-Headers.git
+
+# SPIRV-Headers -- header-only. OPTIONAL to configure, which is exactly why
+# it is pinned: without it configure:7858-7861 only WARNS ("spirv-headers not
+# found, swscale SPIR-V backend unavailable") and swscale silently loses its
+# Vulkan backend (libswscale/vulkan/ops.c gates on HAVE_SPIRV_*_SPIRV_H).
+# verify-output.sh asserts HAVE_SPIRV_UNIFIED1_SPIRV_H. LICENSE: MIT-style
+# (Khronos).
+SPIRV_HEADERS_TAG=vulkan-sdk-1.4.363.0
+SPIRV_HEADERS_COMMIT=496543121ce6419f23d6fa5d7194ba66c36212d2
+SPIRV_HEADERS_REPO=https://github.com/KhronosGroup/SPIRV-Headers.git
+
+# glslang -- a HOST BUILD TOOL, not a library: nothing of it is linked. FFmpeg
+# 9.0 compiles its GLSL compute shaders to SPIR-V at BUILD time and embeds the
+# bytecode in libavcodec/libavfilter/libswscale. Without a compiler,
+# configure:7809-7831 silently disables `spirv_compiler`, and with it all 18
+# *_vulkan filters, the ffv1_vulkan/prores_ks_vulkan encoders and five Vulkan
+# hwaccels -- with NO error. `spirv_compiler` is in no list configure prints,
+# so config.h cannot prove it; the component contract (scale_vulkan,
+# ffv1_vulkan in flags/required-components.txt) does.
+# Built from source rather than taken from a package manager because (a) the
+# SPIR-V it emits ends up in the shipped libraries, so its version is part of
+# what we ship, and (b) EL8's packaged glslang predates the
+# `--glsl-version 460` / `--target-env spirv1.6` / `--depfile` flags configure
+# passes. scripts/build-ffmpeg.sh hands configure this exact binary via
+# --glslc= so a system glslc on PATH can never be picked instead.
+# Pre-flight: all 58 *.comp.glsl in ffmpeg-9.0.2 compiled cleanly with
+# configure's exact flags under glslang 16.2.0; this pin is 16.6.0.
+# LICENSE: BSD-3-Clause / Apache-2.0 / MIT mix (its own LICENSE.txt). Its
+# source is shipped in the corresponding-source archive anyway, like
+# Implib.so, because its OUTPUT is in the binaries.
+GLSLANG_TAG=vulkan-sdk-1.4.363.0
+GLSLANG_COMMIT=e1b562a8bed273a02f30b59b66a5d499793cede5
+GLSLANG_REPO=https://github.com/KhronosGroup/glslang.git
 
 # ---------------------------------------------------------------------------
 # VAAPI stack -- linux/x86_64 ONLY, and NOT linked the way it looks.
@@ -529,8 +587,8 @@ XZ_SHA256=016182c70bb5c7c9eb3465030e3a7f6baa25e17b0e8c0afe92772e6021843ce2
 # provide iconv; only mingw does not).
 #
 # *** WHY THIS IS NOT OPTIONAL ON WINDOWS ***
-# configure:4727-4731 -- under --disable-autodetect, and unless iconv is
-# explicitly disabled, configure sets `libc_iconv`. configure:7838-7842 then
+# configure:4790-4794 -- under --disable-autodetect, and unless iconv is
+# explicitly disabled, configure sets `libc_iconv`. configure:7907-7911 then
 # reads:
 #     if enabled libc_iconv; then
 #         check_func_headers iconv.h iconv
@@ -538,8 +596,8 @@ XZ_SHA256=016182c70bb5c7c9eb3465030e3a7f6baa25e17b0e8c0afe92772e6021843ce2
 #         check_func_headers iconv.h iconv || check_lib iconv iconv.h iconv -liconv
 #     fi
 # Because libc_iconv wins, the `-liconv` fallback is NEVER REACHED in our
-# configuration. check_func_headers only ENABLES on success (configure:1490),
-# and configure:8285-8287 then does
+# configuration. check_func_headers only ENABLES on success (configure:1500),
+# and configure:8359-8361 then does
 #     requested $lib && ! enabled $lib && die "ERROR: $lib requested but not found"
 # so on mingw -- where iconv is not in the C library -- configure DIES.
 # scripts/build-ffmpeg.sh therefore passes `--extra-libs=-liconv` on Windows,
