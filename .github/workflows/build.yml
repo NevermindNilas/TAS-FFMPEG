@@ -315,9 +315,16 @@ jobs:
           # `brew install` exits non-zero ("The `brew link` step did not
           # complete successfully", run 37194952841). Nothing in our build
           # runs `openssl`; this only moves a symlink.
+          #
+          # `brew unlink openssl@1.1` is NOT enough: the image created those
+          # symlinks outside Homebrew's link records, so it reports "0
+          # symlinks removed" and the conflict stays (run 37196971477). Delete
+          # every /usr/local/bin symlink whose TARGET is inside openssl@1.1 --
+          # matched on the link target, so nothing else can be touched.
           if brew list --versions openssl@1.1 >/dev/null 2>&1; then
-            brew unlink openssl@1.1
+            brew unlink openssl@1.1 || true
           fi
+          find /usr/local/bin -maxdepth 1 -type l -lname '*openssl@1.1*' -print -delete
           brew install nasm cmake ninja meson pkg-config autoconf automake libtool
           # NOTE: these Homebrew tools are BUILD tools only -- nothing from
           # Homebrew is linked into the artefacts. Every shipped library is
